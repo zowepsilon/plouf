@@ -20,6 +20,8 @@ data Token =
   | Unknown Char
   deriving (Show, Eq)
 
+isIdentStart :: Char -> Bool
+isIdentCont  :: Char -> Bool
 isIdentStart c = c == '_' || isAlpha c
 isIdentCont  c = c == '_' || isAlphaNum c
 
@@ -117,13 +119,15 @@ parsePrimary (KwType : SqBraOpen : NumLit i : SqBraClose : rest) =
     return (Type i, rest)
 parsePrimary _ = Nothing
 
-testCheck :: IO ()
+testCheck :: Maybe ()
 testCheck = do
     let id_expr = Fun "A" (Fun "x" (Var "x"))
-    let Just id_type = evalExpr [] $ Pi "A" (Type 0) (Pi "_" (Var "A") (Var "A"))
-    print $ check 0 [] [] id_expr id_type
+    id_type <- evalExpr [] $ Pi "A" (Type 0) (Pi "_" (Var "A") (Var "A"))
+    check 0 [] [] id_expr id_type
 
 main :: IO ()
 main = do
     source <- readFile "test.plf"
-    print $ parseExpr toks
+    let tokens = tokenize source
+    let expr = parseExpr tokens
+    print expr

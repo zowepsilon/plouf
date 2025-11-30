@@ -8,7 +8,18 @@ data Expr =
   | App Expr Expr
   | Pi String Expr Expr
   | Type Integer
-  deriving (Show, Eq)
+  deriving Eq
+
+
+instance Show Expr where
+    show (Var x) = x
+    show (Fun x e) = "(fun " ++ x ++ " -> " ++ show e ++ ")"
+    show (App f a) = "(" ++ show f ++ " " ++ show a ++ ")"
+
+    show (Pi "_" t b) = show t ++ " -> " ++ show b
+    show (Pi a   t b) = "(" ++ a ++ ": " ++ show t ++ ") -> " ++ show b
+    
+    show (Type i) = "Type[" ++ show i ++ "]"
 
 data Value =
     VFun (Value -> Maybe Value)
@@ -99,5 +110,3 @@ check k tenv env e t = do
     if (veq k t t')
         then return ()
         else Nothing
-
-
