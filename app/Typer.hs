@@ -41,9 +41,16 @@ instance Show Value where
 
 data State =
     State { env, tenv :: Assoc String Value }
-    deriving Show
 
+instance Show State where
+    show State { env=env, tenv=tenv } = showUnpacked env tenv
+        where
+            showUnpacked _ [] = ""
+            showUnpacked env ((name, ty) : rest) =
+                let cont = if null rest then "" else "\n" in
+                name ++ ": " ++ show ty ++ cont ++ showUnpacked env rest
 
+emptyState :: State
 emptyState = State { env = [], tenv = [] }
 
 addToEnv :: State -> String -> Value -> State
@@ -106,7 +113,7 @@ veq k x y =
         _ -> False
 
 inferExpr :: Int -> State -> Expr -> Result Value
-inferExpr k state (Var x) =
+inferExpr _ state (Var x) =
     case assocMaybe (tenv state) x of
         Just ty -> return ty
         Nothing -> Left $ UnknownVariableTyping state x

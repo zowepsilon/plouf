@@ -234,6 +234,7 @@ main = do
     source <- readFile "test.plf"
     let tokens = tokenize source
     case parseProgram tokens of
-        Nothing -> print "parsing error"
-        Just stmts ->
-            print $ runProgram emptyState stmts
+        Nothing -> putStrLn "parsing error"
+        Just stmts -> case runProgram emptyState stmts of
+            Left err -> putStrLn $ "typing error: " ++ show err
+            Right st -> print st
