@@ -10,6 +10,9 @@ data Expr =
   | Type Integer
   deriving Eq
 
+data Statement =
+    Axiom
+    
 
 instance Show Expr where
     show (Var x) = x
@@ -54,7 +57,6 @@ evalExpr env (Pi x t e)  = do
 fresh :: Int -> String
 fresh k = "x@" ++ show k
 
-
 neutral :: Int -> Neutral -> Maybe Expr
 neutral _ (NVar x)   = Just $ Var x
 neutral k (NApp f x) = do
@@ -82,31 +84,31 @@ readback k (VNeutral n) = neutral k n
 veq :: Int -> Value -> Value -> Bool
 veq k x y = (readback k x) == (readback k y)
 
-infer :: Int -> TEnv -> Env -> Expr -> Maybe Value
-infer _ tenv _ (Var x) = assocMaybe tenv x
+inferExpr :: Int -> TEnv -> Env -> Expr -> Maybe Value
+inferExpr _ tenv _ (Var x) = assocMaybe tenv x
 
-infer k tenv env (App fun arg) = do
-    (VPi a b) <- infer k tenv env fun
-    _ <- check k tenv env arg a
+inferExpr k tenv env (App fun arg) = do
+    (VPi a b) <- inferExpr k tenv env fun
+    _ <- checkExpr k tenv env arg a
     arg <- evalExpr env arg
     b arg -- dependent types!!!
 
-infer k tenv env (Pi x a b) = do
-    (VType i) <- infer k tenv env a
+inferExpr k tenv env (Pi x a b) = do
+    (VType i) <- inferExpr k tenv env a
     a <- evalExpr env a
-    (VType j) <- infer k ((x, a) : tenv) env b
+    (VType j) <- inferExpr k ((x, a) : tenv) env b
     return $ VType (max i j)
 
-infer _ _ _ (Type i)  = return $ VType (i+1)
-infer _ _ _ (Fun _ _) = Nothing
+inferExpr _ _ _ (Type i)  = return $ VType (i+1)
+inferExpr _ _ _ (Fun _ _) = Nothing
 
-check :: Int -> TEnv -> Env -> Expr -> Value -> Maybe ()
-check k tenv env (Fun x e) (VPi a b) = do
+checkExpr :: Int -> TEnv -> Env -> Expr -> Value -> Maybe ()
+checkExpr k tenv env (Fun x e) (VPi a b) = do
     let y = VNeutral (NVar (fresh k))
     b <- (b y)
-    check (k+1) ((x, a) : tenv) ((x, y) : env) e b
-check k tenv env e t = do
-    t' <- infer k tenv env e
+    checkExpr (k+1) ((x, a) : tenv) ((x, y) : env) e b
+checkExpr k tenv env e t = do
+    t' <- inferExpr k tenv env e
     if (veq k t t')
         then return ()
         else Nothing

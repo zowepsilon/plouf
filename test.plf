@@ -1,1 +1,3 @@
-(A: Type[0]) -> A -> (fun x -> x) A
+(A: Type[0])
+    -> A 
+    -> (fun x -> x) A
