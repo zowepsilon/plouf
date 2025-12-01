@@ -1,3 +1,9 @@
-(A: Type[0])
-    -> A 
-    -> (fun x -> x) A
+axiom bot: Type
+
+not: Type -> Type := fun A -> (A -> bot)
+
+notnot: (A: Type) -> A -> not (not A)
+    := fun A -> fun a -> fun abs -> abs a
+
+
+

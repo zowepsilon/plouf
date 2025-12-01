@@ -1,9 +1,12 @@
 module Main where
 import Data.Char
--- import Debug.Trace
--- import Data.Maybe
+import Debug.Trace
+import Data.Maybe
 
 import Typer
+
+enableDebug :: Bool
+enableDebug = False
 
 data Token =
     ColonEq
@@ -19,6 +22,7 @@ data Token =
   | NumLit Integer
   | KwFun
   | KwType
+  | KwAxiom
   | Unknown Char
   deriving (Show, Eq)
 
@@ -66,6 +70,7 @@ tokenize (c : rest)
                 ([], (c : rest))
         toKeyword "fun" = KwFun
         toKeyword "Type" = KwType
+        toKeyword "axiom" = KwAxiom
         toKeyword name = Ident name
 
         tokenizeNumLit [] = ([], [])
@@ -76,7 +81,11 @@ tokenize (c : rest)
             else
                 ([], (c : rest))
 
+
 type IndentLevel = Int
+
+indentOffset :: IndentLevel
+indentOffset = 2
 
 checkNewline :: IndentLevel -> IndentLevel -> Maybe ()
 checkNewline l i =
@@ -91,25 +100,51 @@ ignoreNewline l (Newline i : rest) =
     else Nothing
 ignoreNewline _ tokens = Just tokens
 
+
+parseProgram :: [Token] -> Maybe [Stmt]
+parseStmt    :: IndentLevel -> [Token] -> Maybe (Stmt, [Token])
 parseExpr    :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
-parseExprApp :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
+parsePiExpr  :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
 parseApp     :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
 parsePrimary :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
 
--- parseExprApp l tokens | trace ("parseExprApp " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
-parseExprApp l tokens = do
-    (left, rest) <- parseApp l tokens
-    case rest of
-        (Newline i : Arrow : rest) | l <= i -> do
-            (right, rest) <- parseExpr l rest
-            return (Pi "_" left right, rest)
-        (Arrow : rest) -> do
-            (right, rest) <- parseExpr l rest
-            return (Pi "_" left right, rest)
-        _ -> return (left, rest)
 
+parseProgram [] = Just []
+parseProgram (Newline _ : rest) = parseProgram rest
+parseProgram tokens = do
+    (stmt, rest) <- parseStmt 0 tokens
+    stmts <- parseProgram rest
+    return (stmt : stmts)
 
--- parseExpr l tokens | trace ("parseExpr " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parseStmt l tokens | enableDebug && trace ("parseStmt " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parseStmt _ [] = Nothing
+parseStmt l (Newline i : rest) = do checkNewline l i; parseStmt l rest
+parseStmt l (KwAxiom : rest) = do
+    rest <- ignoreNewline (l+indentOffset) rest
+    (Ident name : Colon : rest) <- return rest
+
+    (ty, rest) <- parseExpr (l+indentOffset) rest
+    return (Axiom name ty, rest) 
+
+parseStmt l (Ident name : ColonEq : rest) = do
+    rest <- ignoreNewline (l+indentOffset) rest
+    (value, rest) <- parseExpr (l+indentOffset) rest
+
+    return (Declaration name Nothing value, rest)
+
+parseStmt l (Ident name : Colon : rest) = do
+    (ty, rest) <- parseExpr (l+indentOffset) rest
+
+    rest <- ignoreNewline (l+indentOffset) rest
+    (ColonEq : rest) <- return rest
+
+    rest <- ignoreNewline (l+indentOffset) rest
+    (value, rest) <- parseExpr (l+indentOffset) rest
+
+    return (Declaration name (Just ty) value, rest)
+parseStmt _ _ = Nothing
+
+parseExpr l tokens | enableDebug && trace ("parseExpr " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
 parseExpr l (Newline i : rest) = do checkNewline l i; parseExpr l rest
 parseExpr l (KwFun : rest) = do
     rest <- ignoreNewline l rest
@@ -137,7 +172,7 @@ parseExpr l tokens@(ParenOpen : rest) = do
             (ret_ty, rest) <- parseExpr l rest
 
             return (Pi var arg_ty ret_ty, rest)
-        Nothing -> parseExprApp l tokens
+        Nothing -> parsePiExpr l tokens
     where
         tryPiType rest = do
             rest <- ignoreNewline l rest
@@ -147,14 +182,26 @@ parseExpr l tokens@(ParenOpen : rest) = do
             rest <- ignoreNewline l rest
             return (var, rest)
             
-parseExpr l tokens = parseExprApp l tokens
+parseExpr l tokens = parsePiExpr l tokens
 
--- parseApp l tokens | trace ("parseApp " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parsePiExpr l tokens | enableDebug && trace ("parsePiExpr " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parsePiExpr l tokens = do
+    (left, rest) <- parseApp l tokens
+    case rest of
+        (Newline i : Arrow : rest) | l <= i -> do
+            (right, rest) <- parseExpr l rest
+            return (Pi "_" left right, rest)
+        (Arrow : rest) -> do
+            (right, rest) <- parseExpr l rest
+            return (Pi "_" left right, rest)
+        _ -> return (left, rest)
+
+parseApp l tokens | enableDebug && trace ("parseApp " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
 parseApp l tokens = do
     (left, rest) <- parsePrimary l tokens
     parseArg left rest
     where
-        -- parseArg left tokens | trace ("parseArg " ++ show left ++ " " ++ show (listToMaybe tokens)) False = undefined
+        parseArg left tokens | enableDebug && trace ("parseArg " ++ show left ++ " " ++ show (listToMaybe tokens)) False = undefined
         parseArg left (Newline i : rest) | l <= i = parseArg left rest
         parseArg left tokens@(ParenOpen : _)      = parseArgContinue left tokens
         parseArg left tokens@(Ident _   : _)      = parseArgContinue left tokens
@@ -165,7 +212,7 @@ parseApp l tokens = do
             (right, rest) <- parsePrimary l tokens
             parseArg (App left right) rest
 
--- parsePrimary l tokens | trace ("parsePrimary " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parsePrimary l tokens | enableDebug && trace ("parsePrimary " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
 parsePrimary l (Newline i : rest) = do checkNewline l i; parsePrimary l rest
 parsePrimary _ ((Ident name) : rest) = return (Var name, rest)
 parsePrimary l (ParenOpen : rest) = do
@@ -173,28 +220,20 @@ parsePrimary l (ParenOpen : rest) = do
     rest <- ignoreNewline l rest
     (ParenClose : rest) <- return rest
     return (inner, rest)
-parsePrimary l (KwType : rest) = do
-    rest <- ignoreNewline l rest
-    (SqBraOpen : rest) <- return rest
-
-    rest <- ignoreNewline l rest
-    (NumLit i : rest) <- return rest
-
-    rest <- ignoreNewline l rest
-    (SqBraClose : rest) <- return rest
-
-    return (Type i, rest)
+parsePrimary _ (KwType : rest) = return (Type, rest)
 parsePrimary _ _ = Nothing
 
-testCheck :: Maybe ()
+testCheck :: Result ()
 testCheck = do
     let id_expr = Fun "A" (Fun "x" (Var "x"))
-    id_type <- evalExpr [] $ Pi "A" (Type 0) (Pi "_" (Var "A") (Var "A"))
-    checkExpr 0 [] [] id_expr id_type
+    id_type <- evalExpr emptyState $ Pi "A" Type (Pi "_" (Var "A") (Var "A"))
+    checkExpr 0 emptyState id_expr id_type
 
 main :: IO ()
 main = do
     source <- readFile "test.plf"
     let tokens = tokenize source
-    let expr = parseExpr 4 tokens
-    print expr
+    case parseProgram tokens of
+        Nothing -> print "parsing error"
+        Just stmts ->
+            print $ runProgram emptyState stmts
