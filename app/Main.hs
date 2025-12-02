@@ -223,12 +223,6 @@ parsePrimary l (ParenOpen : rest) = do
 parsePrimary _ (KwType : rest) = return (Type, rest)
 parsePrimary _ _ = Nothing
 
-testCheck :: Result ()
-testCheck = do
-    let id_expr = Fun "A" (Fun "x" (Var "x"))
-    id_type <- evalExpr emptyState $ Pi "A" Type (Pi "_" (Var "A") (Var "A"))
-    checkExpr 0 emptyState id_expr id_type
-
 main :: IO ()
 main = do
     source <- readFile "test.plf"

@@ -4,6 +4,3 @@ not: Type -> Type := fun A -> (A -> bot)
 
 notnot: (A: Type) -> A -> not (not A)
     := fun A -> fun a -> fun abs -> abs a
-
-
-

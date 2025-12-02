@@ -1,4 +1,4 @@
-module Typer where
+module Typer(State, Result, Error, Stmt(..), Expr(..), emptyState, runProgram) where
 
 import GHC.Data.List.SetOps
 
@@ -35,9 +35,11 @@ data Neutral =
     NVar String
   | NApp Neutral Value
 
-
 instance Show Value where
-    show val = show $ readback 0 val
+    show val =
+        case readback 0 val of
+            Right repr -> show repr
+            Left err -> "[error in readback: " ++ show err ++ "]"
 
 data State =
     State { env, tenv :: Assoc String Value }
@@ -45,6 +47,7 @@ data State =
 instance Show State where
     show State { env=env, tenv=tenv } = showUnpacked env tenv
         where
+            showUnpacked :: [(String, Value)] -> [(String, Value)] -> String
             showUnpacked _ [] = ""
             showUnpacked env ((name, ty) : rest) =
                 let cont = if null rest then "" else "\n" in
