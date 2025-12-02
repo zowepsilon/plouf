@@ -1,4 +1,5 @@
 axiom bot: Type
+axiom bot.ind: (A: Type) -> bot -> A
 
 not: Type -> Type := fun A -> (A -> bot)
 

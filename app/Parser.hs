@@ -30,7 +30,7 @@ data Token =
 isIdentStart :: Char -> Bool
 isIdentCont  :: Char -> Bool
 isIdentStart c = c == '_' || isAlpha c
-isIdentCont  c = c == '_' || isAlphaNum c
+isIdentCont  c = c == '_' || c == '.' || isAlphaNum c
 
 tokenize :: String -> [Token]
 tokenize []               = []

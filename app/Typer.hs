@@ -8,6 +8,7 @@ data Value =
     VFun (Maybe String) (Value -> Result Value)
   | VPi (Maybe String) Value (Value -> Result Value)
   | VType
+  | Vind String Value [Value]
   | VNeutral Neutral
 
 data Neutral =
@@ -45,8 +46,11 @@ instance Show Value where
             var (Just name) k = (name, k)
             var (Nothing)   k = (fresh k, k+1)
 
+data ConstructorSig = ConsPoint [(String, Value)] [Value]
 
-data State = State { env, tenv :: Assoc String Value }
+data Inductive = Inductive [(String, Value)] (Assoc String ConstructorSig)
+
+data State = State { env, tenv :: Assoc String Value, indTypes :: Assoc String Inductive }
 
 instance Show State where
     show State { env=env, tenv=tenv } = showUnpacked env (reverse tenv)
@@ -65,6 +69,9 @@ addToEnv state x v = state { env = (x, v) : (env state)}
 
 addToTEnv :: State -> String -> Value -> State
 addToTEnv state x v = state { tenv = (x, v) : (tenv state)}
+
+addInductive :: State -> String -> Inductive -> State
+addInductive state name ind = state { indTypes = (name, ind) : (indTypes state) }
 
 evalExpr :: State -> Expr -> Result Value
 evalExpr state (Var x)     =
@@ -172,6 +179,8 @@ data Error =
   | UnknownVariableTyping State String
   | CannotTypeAppWithoutPi State Expr Value
   | NonTypeInPiArgType State Expr Value
+  | NonTypeInductiveKind State Expr
+  | InvalidConstructorType State Expr
   deriving Show
 
 type Result a = Either Error a
@@ -183,6 +192,54 @@ runStatement state (Axiom name ty) = do
     let val = VNeutral (NVar name)
     let state' = addToEnv state name val
     return $ addToTEnv state' name ty
+
+runStatement state (IndDecl tyName kind constructors) = do
+    _ <- checkExpr 0 state kind VType
+    kind <- evalExpr state kind
+    kindVal <- readback 0 kind
+    kindArgs <- getKindArgs kindVal
+    kindArgs <- mapM (\(name, e) -> do e <- evalExpr state e; return (name, e)) kindArgs
+    let ty = VNeutral (NVar tyName)
+    let state' = addToTEnv (addToEnv state tyName ty) tyName kind
+    constructors <- mapM (evalCons state' tyName) constructors
+    let ind = Inductive kindArgs constructors
+    -- TODO: add constructors to the value & typing scopes
+    return $ addInductive state' tyName ind
+
+    where
+        getKindArgs :: Expr -> Result [(String, Expr)]
+        getKindArgs (Pi a t b) = do
+            args <- getKindArgs b
+            return $ (a, t) : args
+        getKindArgs Type = return []
+        getKindArgs kind = Left (NonTypeInductiveKind state kind)
+
+        evalCons :: State -> String -> (String, Expr) -> Result (String, ConstructorSig)
+        evalCons state tyName (consName, consTy) = do
+            _ <- checkExpr 0 state consTy VType
+            consTy <- evalExpr state consTy
+            consTy <- readback 0 consTy
+            (consArgs, consTyArgs) <- linearize consTy
+            consArgs <- mapM (\(name, e) -> do e <- evalExpr state e; return (name, e)) consArgs
+            consTyArgs <- mapM (evalExpr state) consTyArgs
+            return (tyName, ConsPoint consArgs consTyArgs)
+        
+        linearize :: Expr -> Result ([(String, Expr)], [Expr])
+        linearize (Pi a t b) = do
+            (args, tail) <- linearize b
+            return ((a, t) : args, tail)
+        linearize consTy = do
+            tail <- linearizeTail tyName consTy
+            return $ ([], tail)
+
+        linearizeTail :: String -> Expr -> Result [Expr]
+        linearizeTail tyName (Var x) | x == tyName = return []
+        linearizeTail tyName (App f arg) = do
+            tail <- linearizeTail tyName f 
+            return (arg : tail)
+        linearizeTail _ ret = Left $ InvalidConstructorType state ret
+        
+
 runStatement state (Declaration name Nothing val) = do
     ty <- inferExpr 0 state val
     runDecl state name ty val

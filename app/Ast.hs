@@ -6,11 +6,13 @@ data Expr =
   | App Expr Expr
   | Pi String Expr Expr
   | Type
+  | Ind String Expr [Expr] -- contructed only through readBack for type checking
   deriving Eq
 
 data Stmt =
     Declaration String (Maybe Expr) Expr
   | Axiom String Expr
+  | IndDecl String Expr [(String, Expr)]
   deriving Show
 
 instance Show Expr where

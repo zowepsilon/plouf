@@ -3,7 +3,6 @@ module Main where
 import Parser
 import Typer
 
-
 main :: IO ()
 main = do
     source <- readFile "test.plf"
