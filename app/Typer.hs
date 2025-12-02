@@ -1,29 +1,8 @@
-module Typer(State, Result, Error, Stmt(..), Expr(..), emptyState, runProgram) where
+module Typer(Result, Error, State, emptyState, runProgram) where
 
 import GHC.Data.List.SetOps
 
-data Expr =
-    Var String
-  | Fun String Expr
-  | App Expr Expr
-  | Pi String Expr Expr
-  | Type
-  deriving Eq
-
-data Stmt =
-    Declaration String (Maybe Expr) Expr
-  | Axiom String Expr
-  deriving Show
-
-instance Show Expr where
-    show (Var x) = x
-    show (Fun x e) = "(fun " ++ x ++ " -> " ++ show e ++ ")"
-    show (App f a) = "(" ++ show f ++ " " ++ show a ++ ")"
-
-    show (Pi "_" t b) = show t ++ " -> " ++ show b ++ ")"
-    show (Pi a   t b) = "(" ++ a ++ ": " ++ show t ++ ") -> " ++ show b
-    
-    show Type = "Type"
+import Ast
 
 data Value =
     VFun (Value -> Result Value)
@@ -41,8 +20,7 @@ instance Show Value where
             Right repr -> show repr
             Left err -> "[error in readback: " ++ show err ++ "]"
 
-data State =
-    State { env, tenv :: Assoc String Value }
+data State = State { env, tenv :: Assoc String Value }
 
 instance Show State where
     show State { env=env, tenv=tenv } = showUnpacked env tenv
