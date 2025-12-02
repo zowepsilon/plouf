@@ -5,8 +5,8 @@ import GHC.Data.List.SetOps
 import Ast
 
 data Value =
-    VFun (Value -> Result Value)
-  | VPi Value (Value -> Result Value)
+    VFun (Maybe String) (Value -> Result Value)
+  | VPi (Maybe String) Value (Value -> Result Value)
   | VType
   | VNeutral Neutral
 
@@ -15,15 +15,41 @@ data Neutral =
   | NApp Neutral Value
 
 instance Show Value where
-    show val =
-        case readback 0 val of
-            Right repr -> show repr
-            Left err -> "[error in readback: " ++ show err ++ "]"
+    show val = case readbackShow 0 val of
+        Right repr -> show repr
+        Left err -> "{error in readback: " ++ show err ++ "}"
+
+        where
+            neutralShow _ (NVar x)   = return $ Var x
+            neutralShow k (NApp f x) = do
+                f <- neutralShow k f
+                x <- readbackShow k x
+                return (App f x)
+
+            readbackShow k (VFun displayName f) = do
+                let (x, k') = var displayName k
+                f <- f $ VNeutral $ NVar x
+                f <- readbackShow k' f
+                return (Fun x f)
+
+            readbackShow k (VPi displayName a b) = do
+                let (x, k') = var displayName k
+                b <- b (VNeutral $ NVar x)
+                b <- readbackShow k' b
+                a <- readbackShow k a
+                return (Pi x a b)
+
+            readbackShow _ VType    = return Type
+            readbackShow k (VNeutral n) = neutralShow k n
+
+            var (Just name) k = (name, k)
+            var (Nothing)   k = (fresh k, k+1)
+
 
 data State = State { env, tenv :: Assoc String Value }
 
 instance Show State where
-    show State { env=env, tenv=tenv } = showUnpacked env tenv
+    show State { env=env, tenv=tenv } = showUnpacked env (reverse tenv)
         where
             showUnpacked :: [(String, Value)] -> [(String, Value)] -> String
             showUnpacked _ [] = ""
@@ -46,18 +72,18 @@ evalExpr state (Var x)     =
         Just val -> return val
         Nothing  -> Left $ UnknownVariable state x
 evalExpr state (Fun x e) = do
-    return $ VFun (\v -> evalExpr (addToEnv state x v) e)
+    return $ VFun (Just x) (\v -> evalExpr (addToEnv state x v) e)
 evalExpr _ Type = return VType
 evalExpr state (App f x)   = do
     f <- evalExpr state f
     x <- evalExpr state x
     case f of
-        (VFun f)   -> f x
+        (VFun _ f)   -> f x
         (VNeutral f) -> return $ VNeutral (NApp f x)
         _            -> Left $ AppOnNonFun state f x
 evalExpr state (Pi x t e)  = do
     t <- evalExpr state t
-    return $ VPi t (\v -> evalExpr (addToEnv state x v) e)
+    return $ VPi (Just x) t (\v -> evalExpr (addToEnv state x v) e)
 
 
 fresh :: Int -> String
@@ -71,13 +97,13 @@ neutral k (NApp f x) = do
     return (App f x)
 
 readback :: Int -> Value -> Result Expr
-readback k (VFun f)     = do
+readback k (VFun _ f)     = do
     let x = fresh k
     f <- f $ VNeutral $ NVar x
     f <- readback (k+1) f
     return (Fun x f)
 
-readback k (VPi a b)    = do
+readback k (VPi _ a b)    = do
     let x = fresh k
     b <- b (VNeutral $ NVar x)
     b <- readback (k+1) b
@@ -100,7 +126,7 @@ inferExpr _ state (Var x) =
         Nothing -> Left $ UnknownVariableTyping state x
 inferExpr k state (App fun arg) = do
     (a, b) <- case inferExpr k state fun of
-        Right (VPi a b) -> return (a, b)
+        Right (VPi _ a b) -> return (a, b)
         Right ty -> Left $ CannotTypeAppWithoutPi state (App fun arg) ty
         Left err -> Left err
     _ <- checkExpr k state arg a
@@ -126,7 +152,7 @@ inferExpr _ _ Type = return VType
 inferExpr _ state f@(Fun _ _) = Left $ CannotInferTypeOfFun state f
 
 checkExpr :: Int -> State -> Expr -> Value -> Result ()
-checkExpr k state (Fun x e) (VPi a b) = do
+checkExpr k state (Fun x e) (VPi _ a b) = do
     let y = VNeutral (NVar (fresh k))
     b <- (b y)
     let state' = addToTEnv state x a
