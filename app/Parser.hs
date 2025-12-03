@@ -24,6 +24,7 @@ data Token =
   | KwFun
   | KwType
   | KwAxiom
+  | KwInductive
   | Unknown Char
   deriving (Show, Eq)
 
@@ -72,6 +73,7 @@ tokenize (c : rest)
         toKeyword "fun" = KwFun
         toKeyword "Type" = KwType
         toKeyword "axiom" = KwAxiom
+        toKeyword "inductive" = KwInductive
         toKeyword name = Ident name
 
         tokenizeNumLit [] = ([], [])
@@ -86,7 +88,7 @@ tokenize (c : rest)
 type IndentLevel = Int
 
 indentOffset :: IndentLevel
-indentOffset = 2
+indentOffset = 4
 
 checkNewline :: IndentLevel -> IndentLevel -> Maybe ()
 checkNewline l i =
@@ -107,6 +109,7 @@ parseProgram = parseProgramTok . tokenize
 
 parseProgramTok :: [Token] -> Maybe [Stmt]
 parseStmt       :: IndentLevel -> [Token] -> Maybe (Stmt, [Token])
+parseAnnot      :: IndentLevel -> [Token] -> Maybe (String, Expr, [Token])
 parseExpr       :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
 parsePiExpr     :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
 parseApp        :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
@@ -124,11 +127,27 @@ parseStmt l tokens | enableDebug && trace ("parseStmt " ++ show l ++ " " ++ show
 parseStmt _ [] = Nothing
 parseStmt l (Newline i : rest) = do checkNewline l i; parseStmt l rest
 parseStmt l (KwAxiom : rest) = do
-    rest <- ignoreNewline (l+indentOffset) rest
-    (Ident name : Colon : rest) <- return rest
-
-    (ty, rest) <- parseExpr (l+indentOffset) rest
+    (name, ty, rest) <- parseAnnot (l+indentOffset) rest
     return (Axiom name ty, rest) 
+
+parseStmt l (KwInductive : rest) = do
+    rest <- ignoreNewline (l+indentOffset) rest
+    (tyName, tyKind, rest) <- parseAnnot (l+2*indentOffset) rest
+
+    (constructors, rest) <- parseConstructors (l+indentOffset) rest
+    let stmt = IndDecl tyName tyKind constructors
+    return (stmt, rest)
+
+    where
+        parseStmt l tokens
+            | enableDebug && trace ("parseConstructors" ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+        parseConstructors :: IndentLevel -> [Token] -> Maybe ([(String, Expr)], [Token])
+        parseConstructors l (Newline i : rest) | l <= i = do
+            (consName, consTy, rest) <- parseAnnot (l+indentOffset) rest
+            (others, rest) <- parseConstructors l rest
+            return ((consName, consTy) : others, rest)
+        parseConstructors l (Newline i : rest) = return ([], rest)
+        parseConstructors _ _ = Nothing
 
 parseStmt l (Ident name : ColonEq : rest) = do
     rest <- ignoreNewline (l+indentOffset) rest
@@ -136,8 +155,8 @@ parseStmt l (Ident name : ColonEq : rest) = do
 
     return (Declaration name Nothing value, rest)
 
-parseStmt l (Ident name : Colon : rest) = do
-    (ty, rest) <- parseExpr (l+indentOffset) rest
+parseStmt l tokens = do
+    (name, ty, rest) <- parseAnnot (l+indentOffset) tokens
 
     rest <- ignoreNewline (l+indentOffset) rest
     (ColonEq : rest) <- return rest
@@ -147,6 +166,11 @@ parseStmt l (Ident name : Colon : rest) = do
 
     return (Declaration name (Just ty) value, rest)
 parseStmt _ _ = Nothing
+
+parseAnnot l (Ident name : Colon : rest) = do
+    (ty, rest) <- parseExpr l rest
+    return (name, ty, rest)
+parseAnnot _ _ = Nothing
 
 parseExpr l tokens | enableDebug && trace ("parseExpr " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
 parseExpr l (Newline i : rest) = do checkNewline l i; parseExpr l rest

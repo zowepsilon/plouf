@@ -1,7 +1,17 @@
+inductive Bool: Type
+    true: Bool
+    false: Bool
+
+inductive Sum: (A: Type) -> (B: Type) -> Type
+    inl: (A: Type) -> (B: Type) -> A -> Sum A B
+    inr: (A: Type) -> (B: Type) -> B -> Sum A B
+
 axiom bot: Type
 axiom bot.ind: (A: Type) -> bot -> A
 
 not: Type -> Type := fun A -> (A -> bot)
+
+thing := inl Bool (Bool -> Bool) true
 
 notnot: (A: Type) -> A -> not (not A)
     := fun A -> fun a -> fun abs -> abs a
