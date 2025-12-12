@@ -6,6 +6,15 @@ inductive Nat: Type
     Z: Nat
     S: (n: Nat) -> Nat
 
+inductive isEven: Nat -> Type
+    EvenZ: isEven Z
+    EvenS: (n: Nat) -> isEven n -> isEven (S (S n))
+
+inductive Eq: (A: Type) -> (x: A) -> (y: A) -> Type
+    refl: (A: Type) -> (x: A) -> Eq A x x
+
+inductive bot: Type
+
 inductive List: (A: Type) -> (n: Nat) -> Type
     nil: (A: Type) -> List A Z
     cons: (A: Type) -> (n: Nat) -> (hd: A) -> (tl: List A n) -> List A (S n)

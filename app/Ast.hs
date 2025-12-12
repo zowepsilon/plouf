@@ -9,7 +9,7 @@ data Expr =
   | App Expr Expr
   | Pi String Expr Expr
   | Type
-  | Ind String Expr [Expr] -- contructed only through readback for type checking
+  | Ind String [Expr] Expr -- contructed only through readback for type checking
   deriving Eq
 
 data Stmt =
@@ -22,7 +22,10 @@ data Value =
     VFun (Maybe String) (Value -> Result Value)
   | VPi (Maybe String) Value (Value -> Result Value)
   | VType
-  | Vind String Value [Value]
+  --     induction type name
+  --            branches
+  --                    value to match
+  | Vind String [Value] Value
   | VNeutral Neutral
 
 data Neutral =

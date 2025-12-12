@@ -124,6 +124,9 @@ runStatement state (IndDecl tyName kind constructors) = do
     let ind = Inductive kindArgs consSigs
 
     traceShowM (inductionType tyName kindArgs consSigs)
+    -- predicate + cases + type arguments for value
+    let indArity = 1 + length kindArgs + length consSigs
+    traceShowM indArity
 
     return $ addInductive state'' tyName ind
 
@@ -198,7 +201,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             let predicateNameVar = NVar predicateName in
             let caseRet = foldl (\fun argName -> NApp fun $ VNeutral $ NVar argName) consNameVar (reverse argNames) in
             let (ConsPoint _ consKindArgs) = consSig in
-            let predicateKindArgs = foldl NApp predicateNameVar consKindArgs in
+            let predicateKindArgs = foldl NApp predicateNameVar (reverse consKindArgs) in
             (VNeutral $ NApp predicateKindArgs $ VNeutral caseRet, k)
 
         consInductionArgType k predicateName consName consSig argNames ((argName, argType) : rest) =
@@ -275,6 +278,18 @@ runStatement state (IndDecl tyName kind constructors) = do
                     -- isn't there a bit more bookkeeping to do if arrows are dependent?
                     --                        \/ here
                     (VPi (Just var) argType (\_ -> return tail), k'')
+        
+        inductionClosure :: String -> Int -> Int -> State -> Value
+        inductionClosure tyName arity i state
+            | i == arity =
+                Vind tyName (map nValVar [0..(arity-1)]) (nValVar arity)
+            | otherwise =
+                let body = inductionClosure tyName arity (i+1) in
+                let x = nValVar i in
+                VFun Nothing (\v -> return undefined)
+
+
+        nValVar k = VNeutral (NVar (fresh k))
 
 runStatement state (Declaration name Nothing val) = do
     ty <- inferExpr 0 state val
