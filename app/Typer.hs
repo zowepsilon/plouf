@@ -214,7 +214,6 @@ runStatement state (IndDecl tyName kind constructors) = do
                     let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k) in
                     let (tail, k'') = consInductionArgType k' predicateName consName consSig (var : argNames) rest in
                     let predicateNameVar = NVar predicateName in
-                                                                     -- TODO: check if this argument order is correct
                     let predicatePartialInstance = foldl NApp predicateNameVar argTypeArgs in
                     let predicateInstance = VNeutral $ NApp predicatePartialInstance (VNeutral $ NVar var) in
                     let tail' = VPi (Just "_") predicateInstance (\_ -> return tail) in
