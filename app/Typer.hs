@@ -5,83 +5,6 @@ import Debug.Trace
 
 import Ast
 
-data Value =
-    VFun (Maybe String) (Value -> Result Value)
-  | VPi (Maybe String) Value (Value -> Result Value)
-  | VType
-  | Vind String Value [Value]
-  | VNeutral Neutral
-
-data Neutral =
-    NVar String
-  | NApp Neutral Value
-
-instance Show Value where
-    show val = case readbackShow 0 val of
-        Right repr -> show repr
-        Left err -> "{error in readback: " ++ show err ++ "}"
-
-        where
-            neutralShow _ (NVar x)   = return $ Var x
-            neutralShow k (NApp f x) = do
-                f <- neutralShow k f
-                x <- readbackShow k x
-                return (App f x)
-
-            readbackShow k (VFun displayName f) = do
-                let (x, k') = var displayName k
-                f <- f $ VNeutral $ NVar x
-                f <- readbackShow k' f
-                return (Fun x f)
-
-            readbackShow k (VPi displayName a b) = do
-                let (x, k') = var displayName k
-                b <- b (VNeutral $ NVar x)
-                b <- readbackShow k' b
-                a <- readbackShow k a
-                return (Pi x a b)
-
-            readbackShow _ VType    = return Type
-            readbackShow k (VNeutral n) = neutralShow k n
- 
-            var (Just name) k = (name, k)
-            var (Nothing)   k = (fresh k, k+1)
-
-data ConstructorSig = ConsPoint [(String, Value)] [Value]
-    deriving Show
-
-data Inductive = Inductive [(String, Value)] (Assoc String ConstructorSig)
-    deriving Show
-
-data State = State { env, tenv :: Assoc String Value, indTypes :: Assoc String Inductive }
-
-instance Show State where
-    show State { env=env, tenv=tenv } = showUnpacked env (reverse tenv)
-        where
-            showUnpacked :: [(String, Value)] -> [(String, Value)] -> String
-            showUnpacked _ [] = ""
-            showUnpacked env ((name, ty) : rest) =
-                let cont = if null rest then "" else "\n" in
-                name ++ ": " ++ show ty ++ cont ++ showUnpacked env rest
-
-emptyState :: State
-emptyState = State { env = [], tenv = [], indTypes = [] }
-
-addToEnv :: State -> String -> Value -> State
-addToEnv state x v = state { env = (x, v) : (env state)}
-
-addToTEnv :: State -> String -> Value -> State
-addToTEnv state x v = state { tenv = (x, v) : (tenv state)}
-
-addOpaque :: State -> String -> Value -> State
-addOpaque state name ty =
-    let val = VNeutral (NVar name) in
-    let state' = addToEnv state name val in
-    addToTEnv state' name ty
-
-addInductive :: State -> String -> Inductive -> State
-addInductive state name ind = state { indTypes = (name, ind) : (indTypes state) }
-
 evalExpr :: State -> Expr -> Result Value
 evalExpr state (Var x)     =
     case assocMaybe (env state) x of
@@ -101,9 +24,6 @@ evalExpr state (Pi x t e)  = do
     t <- evalExpr state t
     return $ VPi (Just x) t (\v -> evalExpr (addToEnv state x v) e)
 
-
-fresh :: Int -> String
-fresh k = "?" ++ show k
 
 neutral :: Int -> Neutral -> Result Expr
 neutral _ (NVar x)   = return $ Var x
@@ -180,20 +100,6 @@ checkExpr k state e t = do
         then return ()
         else Left $ MismatchedTypes state t t'
 
-data Error =
-    AppOnNonFun State Value Value
-  | CannotInferTypeOfFun State Expr
-  | MismatchedTypes State Value Value
-  | UnknownVariable State String
-  | UnknownVariableTyping State String
-  | CannotTypeAppWithoutPi State Expr Value
-  | NonTypeInPiArgType State Expr Value
-  | NonTypeInductiveKind State Expr
-  | InvalidConstructorType State Expr
-  deriving Show
-
-type Result a = Either Error a
-
 runStatement :: State -> Stmt -> Result State
 runStatement state (Axiom name ty) = do
     _ <- checkExpr 0 state ty VType
@@ -203,17 +109,24 @@ runStatement state (Axiom name ty) = do
 runStatement state (IndDecl tyName kind constructors) = do
     _ <- checkExpr 0 state kind VType
     kindVal <- evalExpr state kind
-    kind <- readback 0 kindVal
+    -- i'm not sure whether doing a readback by reusing the binding
+    -- written by the user is actually sound (this is done to 
+    -- improve the readability of generated induction principles)
+    -- TODO: make sure it is sound
+    kind <- readbackShow 0 kindVal
     kindArgs <- getKindArgs kind
     (kindArgs, state) <- evalArgList state kindArgs
-    let ty = VNeutral (NVar tyName)
+
     let state' = addOpaque state tyName kindVal
-    (consSigs, consTypes) <- unzip <$> mapM (evalCons state' tyName) constructors
+    (consSigs, consTypes) <- unzip <$> mapM (evalCons state') constructors
+
     let state'' = foldl (\state (consName, consTy) -> addOpaque state consName consTy) state' consTypes
     let ind = Inductive kindArgs consSigs
-    -- TODO: add constructors to the value & typing scopes
-    traceShow ind (return ())
+
+    traceShowM (inductionType tyName kindArgs consSigs)
+
     return $ addInductive state'' tyName ind
+
     where
         getKindArgs :: Expr -> Result [(String, Expr)]
         getKindArgs (Pi a t b) = do
@@ -222,15 +135,15 @@ runStatement state (IndDecl tyName kind constructors) = do
         getKindArgs Type = return []
         getKindArgs kind = Left (NonTypeInductiveKind state kind)
 
-        evalCons :: State -> String -> (String, Expr) -> Result ((String, ConstructorSig), (String, Value))
-        evalCons state tyName (consName, consTy) = do
+        evalCons :: State -> (String, Expr) -> Result ((String, ConstructorSig), (String, Value))
+        evalCons state (consName, consTy) = do
             _ <- checkExpr 0 state consTy VType
             consTyVal <- evalExpr state consTy
-            consTy <- readback 0 consTyVal
+            consTy <- readbackShow 0 consTyVal
             (consArgs, consTyArgs) <- linearize consTy
             (consArgs, state) <- evalArgList state consArgs
             consTyArgs <- mapM (evalExpr state) consTyArgs
-            return ((tyName, ConsPoint consArgs consTyArgs), (consName, consTyVal))
+            return ((consName, ConsPoint consArgs consTyArgs), (consName, consTyVal))
         
         linearize :: Expr -> Result ([(String, Expr)], [Expr])
         linearize (Pi a t b) = do
@@ -251,10 +164,118 @@ runStatement state (IndDecl tyName kind constructors) = do
         evalArgList state [] = return ([], state)
         evalArgList state ((argName, argTy) : rest) = do
             argTy <- evalExpr state argTy
-            let state' = addToEnv state argName argTy
+            let state' = addOpaque state argName argTy
             (rest, state'') <- evalArgList state' rest
             return ((argName, argTy) : rest, state'')
-        
+
+        predicateType :: Int -> String -> [String] -> [(String, Value)]  -> (Value, Int)
+        predicateType k tyName kindArgNames [] =
+            let tyNameVar = NVar tyName in
+            (
+                VPi
+                (Just "_")
+                (VNeutral $ foldl
+                    (\fun argName -> NApp fun $ VNeutral $ NVar argName)
+                    tyNameVar
+                    (reverse kindArgNames)
+                )
+                (\_ -> return VType),
+                k
+            )
+        predicateType k tyName kindArgNames ((argName, argType) : rest) =
+            let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k) in
+            let (tail, k'') = predicateType k' tyName (var : kindArgNames) rest in
+            -- isn't there a bit more bookkeeping to do if arrows are dependent?
+            --                        \/ here
+            (VPi (Just var) argType (\_ -> return tail), k'')
+    
+        consInductionArgType ::
+            Int -> String -> String -> ConstructorSig 
+                -> [String] -> [(String, Value)] -> (Value, Int)
+
+        consInductionArgType k predicateName consName consSig argNames [] =
+            let consNameVar = NVar consName in
+            let predicateNameVar = NVar predicateName in
+            let caseRet = foldl (\fun argName -> NApp fun $ VNeutral $ NVar argName) consNameVar (reverse argNames) in
+            let (ConsPoint _ consKindArgs) = consSig in
+            let predicateKindArgs = foldl NApp predicateNameVar consKindArgs in
+            (VNeutral $ NApp predicateKindArgs $ VNeutral caseRet, k)
+
+        consInductionArgType k predicateName consName consSig argNames ((argName, argType) : rest) =
+            case argType of
+                VNeutral n -> case consInductionArgTypeArgs tyName n of
+                    Just argTypeArgs -> consInductionArgTypeIsInd argTypeArgs
+                    _ -> consInductionArgTypeIsNotInd
+                _ -> consInductionArgTypeIsNotInd
+
+            where
+                consInductionArgTypeIsInd :: [Value] -> (Value, Int)
+                consInductionArgTypeIsInd argTypeArgs =
+                    let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k) in
+                    let (tail, k'') = consInductionArgType k' predicateName consName consSig (var : argNames) rest in
+                    let predicateNameVar = NVar predicateName in
+                                                                     -- TODO: check if this argument order is correct
+                    let predicatePartialInstance = foldl NApp predicateNameVar argTypeArgs in
+                    let predicateInstance = VNeutral $ NApp predicatePartialInstance (VNeutral $ NVar var) in
+                    let tail' = VPi (Just "_") predicateInstance (\_ -> return tail) in
+                    (VPi (Just var) argType (\_ -> return tail'), k'')
+
+                consInductionArgTypeIsNotInd :: (Value, Int)
+                consInductionArgTypeIsNotInd =
+                    let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k) in
+                    let (tail, k'') = consInductionArgType k' predicateName consName consSig (var : argNames) rest in
+                    -- same objection as in predicateType
+                    (VPi (Just var) argType (\_ -> return tail), k'')
+            
+                consInductionArgTypeArgs :: String -> Neutral -> Maybe [Value]
+                consInductionArgTypeArgs tyName (NVar f) | f == tyName = Just []
+                consInductionArgTypeArgs tyName (NApp f arg) = do
+                    firstArgs <- consInductionArgTypeArgs tyName f
+                    return $ arg : firstArgs
+                consInductionArgTypeArgs _ _ = Nothing
+
+        inductionType :: String -> [(String, Value)] -> [(String, ConstructorSig)] -> Value
+        inductionType tyName kindArgs consSigs =
+            let pTy = fst $ predicateType 0 tyName [] kindArgs in
+            let tail = fst $ inductionTypeCases 0 consSigs in
+            -- fst $ consInductionArgType 0 tyName "P" consName firstConsSig [] consArgs
+            VPi
+                (Just "P")
+                pTy
+                (\_ -> return tail)
+
+            where
+                inductionTypeCases :: Int -> [(String, ConstructorSig)] -> (Value, Int)
+                inductionTypeCases k [] =
+                    inductionTypeTail k [] kindArgs
+
+                inductionTypeCases k ((consName, consSig@(ConsPoint consArgs _)) : rest) =
+                    let (tail, k') = inductionTypeCases k rest in
+                    let (head, k'') = consInductionArgType k' "P" consName consSig [] consArgs in
+                    (
+                        VPi (Just "_") head (\_ -> return tail),
+                        k''
+                    )
+
+                inductionTypeTail :: Int -> [String] -> [(String, Value)]  -> (Value, Int)
+                inductionTypeTail k kindArgNames [] =
+                    let var = fresh k in
+                    let tyNameVar = NVar tyName in
+                    let valTail = VNeutral $ foldl (\fun argName -> NApp fun $ VNeutral $ NVar argName) tyNameVar (reverse kindArgNames) in
+                    let predTail = VNeutral $ foldl (\fun argName -> NApp fun $ VNeutral $ NVar argName) (NVar "P") (reverse $ var : kindArgNames) in
+                    (
+                        VPi
+                        (Just var)
+                        valTail
+                        (\_ -> return predTail),
+                        k+1
+                    )
+                inductionTypeTail k kindArgNames ((argName, argType) : rest) =
+                    let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k) in
+                    let (tail, k'') = inductionTypeTail k' (var : kindArgNames) rest in
+                    -- isn't there a bit more bookkeeping to do if arrows are dependent?
+                    --                        \/ here
+                    (VPi (Just var) argType (\_ -> return tail), k'')
 
 runStatement state (Declaration name Nothing val) = do
     ty <- inferExpr 0 state val

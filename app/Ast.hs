@@ -1,6 +1,7 @@
-module Ast (Expr(..), Stmt(..)) where
+module Ast where
 
 import Data.List
+import GHC.Data.List.SetOps
 
 data Expr =
     Var String
@@ -17,6 +18,40 @@ data Stmt =
   | IndDecl String Expr [(String, Expr)]
   deriving Show
 
+data Value =
+    VFun (Maybe String) (Value -> Result Value)
+  | VPi (Maybe String) Value (Value -> Result Value)
+  | VType
+  | Vind String Value [Value]
+  | VNeutral Neutral
+
+data Neutral =
+    NVar String
+  | NApp Neutral Value
+  deriving Show
+
+data ConstructorSig = ConsPoint [(String, Value)] [Value]
+    deriving Show
+
+data Inductive = Inductive [(String, Value)] (Assoc String ConstructorSig)
+    deriving Show
+
+data State = State { env, tenv :: Assoc String Value, indTypes :: Assoc String Inductive }
+
+data Error =
+    AppOnNonFun State Value Value
+  | CannotInferTypeOfFun State Expr
+  | MismatchedTypes State Value Value
+  | UnknownVariable State String
+  | UnknownVariableTyping State String
+  | CannotTypeAppWithoutPi State Expr Value
+  | NonTypeInPiArgType State Expr Value
+  | NonTypeInductiveKind State Expr
+  | InvalidConstructorType State Expr
+  deriving Show
+
+type Result a = Either Error a
+
 instance Show Expr where
     show (Var x) = x
     show (Fun x e) = "(fun " ++ x ++ " -> " ++ show e ++ ")"
@@ -31,3 +66,69 @@ instance Show Expr where
     show (Pi a   t            b) = "(" ++ a ++ ": " ++ show t ++ ") -> " ++ show b
     
     show Type = "Type"
+
+instance Show Value where
+    show val = case readbackShow 0 val of
+        Right repr -> show repr
+        Left err -> "{error in readback: " ++ show err ++ "}"
+
+neutralShow _ (NVar x)   = return $ Var x
+neutralShow k (NApp f x) = do
+    f <- neutralShow k f
+    x <- readbackShow k x
+    return (App f x)
+
+readbackShow k (VFun displayName f) = do
+    let (x, k') = var displayName k
+    f <- f $ VNeutral $ NVar x
+    f <- readbackShow k' f
+    return (Fun x f)
+    where
+        var (Just name) k = (name, k)
+        var (Nothing)   k = (fresh k, k+1)
+
+readbackShow k (VPi displayName a b) = do
+    let (x, k') = var displayName k
+    b <- b (VNeutral $ NVar x)
+    b <- readbackShow k' b
+    a <- readbackShow k a
+    return (Pi x a b)
+    where
+        var (Just name) k = (name, k)
+        var (Nothing)   k = (fresh k, k+1)
+
+readbackShow _ VType    = return Type
+readbackShow k (VNeutral n) = neutralShow k n
+
+
+instance Show State where
+    show State { env=env, tenv=tenv } = showUnpacked env (reverse tenv)
+        where
+            showUnpacked :: [(String, Value)] -> [(String, Value)] -> String
+            showUnpacked _ [] = ""
+            showUnpacked env ((name, ty) : rest) =
+                let cont = if null rest then "" else "\n" in
+                name ++ ": " ++ show ty ++ cont ++ showUnpacked env rest
+
+emptyState :: State
+emptyState = State { env = [], tenv = [], indTypes = [] }
+
+addToEnv :: State -> String -> Value -> State
+addToEnv state "_" _ = state
+addToEnv state x v = state { env = (x, v) : (env state)}
+
+addToTEnv :: State -> String -> Value -> State
+addToTEnv state "_" _ = state
+addToTEnv state x v = state { tenv = (x, v) : (tenv state)}
+
+addOpaque :: State -> String -> Value -> State
+addOpaque state name ty =
+    let val = VNeutral (NVar name) in
+    let state' = addToEnv state name val in
+    addToTEnv state' name ty
+
+addInductive :: State -> String -> Inductive -> State
+addInductive state name ind = state { indTypes = (name, ind) : (indTypes state) }
+
+fresh :: Int -> String
+fresh k = "&" ++ show k
