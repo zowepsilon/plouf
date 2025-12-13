@@ -9,7 +9,7 @@ data Expr =
   | App Expr Expr
   | Pi String Expr Expr
   | Type
-  | Ind String [Expr] Expr -- contructed only through readback for type checking
+  | Ind String [Expr] -- constructed only through readback for type checking
   deriving Eq
 
 data Stmt =
@@ -50,6 +50,7 @@ data Error =
   | NonTypeInPiArgType State Expr Value
   | NonTypeInductiveKind State Expr
   | InvalidConstructorType State Expr
+  | Unreachable State String
   deriving Show
 
 type Result a = Either Error a
@@ -67,12 +68,19 @@ instance Show Expr where
     show (Pi "_" t            b) = show t ++ " -> " ++ show b
     show (Pi a   t            b) = "(" ++ a ++ ": " ++ show t ++ ") -> " ++ show b
     
+    show (Ind tyName args) =
+        tyName ++ ".ind " ++ intercalate " " (map show args)
+
     show Type = "Type"
 
 instance Show Value where
     show val = case readbackShow 0 val of
         Right repr -> show repr
         Left err -> "{error in readback: " ++ show err ++ "}"
+
+
+readbackShow :: Int -> Value -> Result Expr
+neutralShow :: Int -> Neutral -> Result Expr 
 
 neutralShow _ (NVar x)   = return $ Var x
 neutralShow k (NApp f x) = do
@@ -98,6 +106,10 @@ readbackShow k (VPi displayName a b) = do
     where
         var (Just name) k = (name, k)
         var (Nothing)   k = (fresh k, k+1)
+
+readbackShow k (VInd tyName args) = do
+    args <- mapM (readbackShow k) args
+    return (Ind tyName args)
 
 readbackShow _ VType    = return Type
 readbackShow k (VNeutral n) = neutralShow k n

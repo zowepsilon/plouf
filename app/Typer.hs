@@ -19,11 +19,13 @@ evalExpr state (App f x)   = do
     case f of
         (VFun _ f)   -> f x
         (VNeutral f) -> return $ VNeutral (NApp f x)
+        (VInd tyName branches) -> undefined
         _            -> Left $ AppOnNonFun state f x
 evalExpr state (Pi x t e)  = do
     t <- evalExpr state t
     return $ VPi (Just x) t (\v -> evalExpr (addToEnv state x v) e)
 
+evalExpr state e@(Ind _ _) = Left $ Unreachable state ("tried to evalExpr " ++ show e)
 
 neutral :: Int -> Neutral -> Result Expr
 neutral _ (NVar x)   = return $ Var x
@@ -33,20 +35,25 @@ neutral k (NApp f x) = do
     return (App f x)
 
 readback :: Int -> Value -> Result Expr
-readback k (VFun _ f)     = do
+readback k (VFun _ f) = do
     let x = fresh k
     f <- f $ VNeutral $ NVar x
     f <- readback (k+1) f
     return (Fun x f)
 
-readback k (VPi _ a b)    = do
+readback k (VPi _ a b) = do
     let x = fresh k
     b <- b (VNeutral $ NVar x)
     b <- readback (k+1) b
     a <- readback k a
     return (Pi x a b)
 
-readback _ VType    = return Type
+readback _ VType = return Type
+
+readback k (VInd tyName args) = do
+    args <- mapM (readback k) args
+    return (Ind tyName args)
+
 readback k (VNeutral n) = neutral k n
 
 veq :: Int -> Value -> Value -> Bool
@@ -86,6 +93,7 @@ inferExpr k state (Pi x a b) = do
 
 inferExpr _ _ Type = return VType
 inferExpr _ state f@(Fun _ _) = Left $ CannotInferTypeOfFun state f
+inferExpr _ state e@(Ind _ _) = Left $ Unreachable state ("tried to inferExpr " ++ show e)
 
 checkExpr :: Int -> State -> Expr -> Value -> Result ()
 checkExpr k state (Fun x e) (VPi _ a b) = do
@@ -126,7 +134,10 @@ runStatement state (IndDecl tyName kind constructors) = do
     (consTypesVal, state') <- evalArgList state' consTypes
 
     let state'' = foldl (\state (consName, consTy) -> addOpaque state consName consTy) state' consTypesVal
+
+    -- TODO: precompute how to recurse
     let ind = Inductive kindArgsVal consSigs
+    traceShowM ind
     
     let indName = (tyName ++ ".ind")
     -- predicate + cases + type arguments for value

@@ -5,4 +5,4 @@ inductive Nat: Type
     Z: Nat
     S: Nat -> Nat
 
-truc := True.ind (fun _ -> Nat) Z
+truc := True.ind (fun _ -> Nat) Z unit
