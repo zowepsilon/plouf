@@ -12,4 +12,4 @@ main = do
             result <- runProgram emptyState stmts
             case result of
                 Left err -> putStrLn $ "typing error: " ++ show err
-                Right st -> print st
+                Right _ -> return ()

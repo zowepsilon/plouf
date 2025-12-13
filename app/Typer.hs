@@ -49,7 +49,6 @@ evalAppVal state f x =
 
             let branch = branches !! (consIndex + 1)
             consArgs <- evalConsArgs (zip consArgs isRecArgs)
-            traceShowM (branch, consArgs)
 
             evalBranch branch consArgs
             where
@@ -162,7 +161,8 @@ runStatement :: State -> Stmt -> Result (State, String)
 runStatement state (Axiom name ty) = do
     _ <- checkExpr 0 state ty VType
     ty <- evalExpr state ty
-    return (addOpaque state name ty, "")
+    let msg = "axiom " ++ name ++ ": " ++ show ty
+    return (addOpaque state name ty, msg)
 
 runStatement state (Print expr) = do
     ty <- inferExpr 0 state expr
@@ -202,7 +202,8 @@ runStatement state (IndDecl tyName kind constructors) = do
     let ind = Inductive kindArgsVal consSigs
     let state5 = addInductive state4 tyName ind
 
-    return (state5, "")
+    let msg = "inductive " ++ tyName ++ ": " ++ show kindVal
+    return (state5, msg)
 
     where
         getKindArgs :: Expr -> Result [(String, Expr)]
@@ -367,7 +368,8 @@ runDecl state name ty val = do
     val <- evalExpr state val
     let state' = addToTEnv state name ty
     let state'' = addToEnv state' name val
-    return (state'', "")
+    let msg = name ++ ": " ++ show ty
+    return (state'', msg)
 
 runProgram :: State -> [Stmt] -> IO (Result State)
 runProgram state [] = return (return state)
