@@ -146,14 +146,12 @@ parseStmt l (KwInductive : rest) = do
     return (stmt, rest)
 
     where
-        parseStmt l tokens
-            | enableDebug && trace ("parseConstructors" ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
         parseConstructors :: IndentLevel -> [Token] -> Maybe ([(String, Expr)], [Token])
         parseConstructors l (Newline i : rest) | l <= i = do
             (consName, consTy, rest) <- parseAnnot (l+indentOffset) rest
             (others, rest) <- parseConstructors l rest
             return ((consName, consTy) : others, rest)
-        parseConstructors l (Newline i : rest) = return ([], rest)
+        parseConstructors _ (Newline _ : rest) = return ([], rest)
         parseConstructors _ _ = Nothing
 
 parseStmt l (Ident name : ColonEq : rest) = do
@@ -172,7 +170,6 @@ parseStmt l tokens = do
     (value, rest) <- parseExpr (l+indentOffset) rest
 
     return (Declaration name (Just ty) value, rest)
-parseStmt _ _ = Nothing
 
 parseAnnot l (Ident name : Colon : rest) = do
     (ty, rest) <- parseExpr l rest
@@ -183,15 +180,32 @@ parseExpr l tokens | enableDebug && trace ("parseExpr " ++ show l ++ " " ++ show
 parseExpr l (Newline i : rest) = do checkNewline l i; parseExpr l rest
 parseExpr l (KwFun : rest) = do
     rest <- ignoreNewline l rest
-    (Ident var : rest) <- return rest
+    (args, rest) <- argList rest
+    
+    if null args then Nothing else Just ()
 
-    rest <- ignoreNewline l rest
     (Arrow : rest) <- return rest
 
     rest <- ignoreNewline l rest
     (body, rest) <- parseExpr l rest
+        
+    let expr = expand args body
+    return (expr, rest)
 
-    return (Fun var body, rest)
+    where
+        argList :: [Token] -> Maybe ([String], [Token])
+        argList (Ident name : rest) = do
+            rest <- ignoreNewline l rest
+            (tail, rest) <- argList rest
+
+            return (name : tail, rest)
+
+        argList rest = return ([], rest)
+        
+        expand :: [String] -> Expr -> Expr
+        expand [] tail = tail
+        expand (a : args) tail = Fun a (expand args tail)
+
 parseExpr l tokens@(ParenOpen : rest) = do
     case tryPiType rest of
         Just (var, rest) -> do

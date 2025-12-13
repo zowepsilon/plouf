@@ -1,11 +1,14 @@
 module Main where
 
+import System.Environment
+
 import Parser
 import Typer
 
 main :: IO ()
 main = do
-    source <- readFile "test.plf"
+    args <- getArgs
+    source <- readFile (args !! 0)
     case parseProgram source of
         Nothing -> putStrLn "parsing error"
         Just stmts -> do
