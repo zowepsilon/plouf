@@ -5,4 +5,12 @@ inductive Nat: Type
     Z: Nat
     S: Nat -> Nat
 
-truc := True.ind (fun _ -> Nat) Z unit
+inductive BTree: Type
+    Leaf: BTree
+    Node: BTree -> BTree -> Nat -> BTree
+
+pred := Nat.ind (fun _ -> Nat) Z (fun n -> fun _ -> n)
+label := BTree.ind (fun _ -> Nat) Z (fun _ -> fun _ -> fun _ -> fun _ -> fun i -> i)
+one := label (Node Leaf Leaf (S Z))
+
+print one

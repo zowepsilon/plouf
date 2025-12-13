@@ -25,6 +25,7 @@ data Token =
   | KwType
   | KwAxiom
   | KwInductive
+  | KwPrint
   | Unknown Char
   deriving (Show, Eq)
 
@@ -74,6 +75,7 @@ tokenize (c : rest)
         toKeyword "Type" = KwType
         toKeyword "axiom" = KwAxiom
         toKeyword "inductive" = KwInductive
+        toKeyword "print" = KwPrint
         toKeyword name = Ident name
 
         tokenizeNumLit [] = ([], [])
@@ -128,7 +130,12 @@ parseStmt _ [] = Nothing
 parseStmt l (Newline i : rest) = do checkNewline l i; parseStmt l rest
 parseStmt l (KwAxiom : rest) = do
     (name, ty, rest) <- parseAnnot (l+indentOffset) rest
-    return (Axiom name ty, rest) 
+    return (Axiom name ty, rest)
+
+parseStmt l (KwPrint : rest) = do
+    rest <- ignoreNewline (l+indentOffset) rest
+    (expr, rest) <- parseExpr (l+indentOffset) rest
+    return (Print expr, rest)
 
 parseStmt l (KwInductive : rest) = do
     rest <- ignoreNewline (l+indentOffset) rest

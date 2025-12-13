@@ -8,6 +8,8 @@ main = do
     source <- readFile "test.plf"
     case parseProgram source of
         Nothing -> putStrLn "parsing error"
-        Just stmts -> case runProgram emptyState stmts of
-            Left err -> putStrLn $ "typing error: " ++ show err
-            Right st -> print st
+        Just stmts -> do
+            result <- runProgram emptyState stmts
+            case result of
+                Left err -> putStrLn $ "typing error: " ++ show err
+                Right st -> print st

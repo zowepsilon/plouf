@@ -16,6 +16,7 @@ data Stmt =
     Declaration String (Maybe Expr) Expr
   | Axiom String Expr
   | IndDecl String Expr [(String, Expr)]
+  | Print Expr
   deriving Show
 
 data Value =
@@ -32,13 +33,16 @@ data Neutral =
   | NApp Neutral Value
   deriving Show
 
-data ConstructorSig = ConsPoint [(String, Value)] [Value]
+data ConstructorSig = ConsPoint [(String, Value)] [Bool] [Value]
     deriving Show
 
 data Inductive = Inductive [(String, Value)] (Assoc String ConstructorSig)
     deriving Show
 
-data State = State { env, tenv :: Assoc String Value, indTypes :: Assoc String Inductive }
+data State = State {
+        env, tenv :: Assoc String Value,
+        indTypes :: Assoc String Inductive
+    }
 
 data Error =
     AppOnNonFun State Value Value
@@ -51,6 +55,9 @@ data Error =
   | NonTypeInductiveKind State Expr
   | InvalidConstructorType State Expr
   | Unreachable State String
+  | UnknownInductiveType State String
+  | RecursorArgumentIsNotAConstructor State Value
+  | UnknownConstructorForInductive State String Inductive
   deriving Show
 
 type Result a = Either Error a
