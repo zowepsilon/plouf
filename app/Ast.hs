@@ -24,8 +24,7 @@ data Value =
   | VType
   --     induction type name
   --            branches
-  --                    value to match
-  | Vind String [Value] Value
+  | VInd String [Value]
   | VNeutral Neutral
 
 data Neutral =
