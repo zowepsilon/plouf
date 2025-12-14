@@ -1,4 +1,4 @@
-module Typer(Result, Error, State, emptyState, runProgram) where
+module Typer(Result, Error, State, emptyState, runStatement, runProgram) where
 
 import Data.List
 import GHC.Data.List.SetOps
@@ -24,6 +24,7 @@ evalExpr state (Pi x t e)  = do
     return $ VPi (Just x) t (\v -> evalExpr (addToEnv state x v) e)
 
 evalExpr state e@(Ind _ _) = Left $ Unreachable state ("tried to evalExpr " ++ show e)
+evalExpr state e@(By _)    = Left $ Unreachable state ("tried to evalExpr " ++ show e)
 
 evalAppVal :: State -> Value -> Value -> Result Value
 evalAppVal state f x =
@@ -31,32 +32,36 @@ evalAppVal state f x =
         (VFun _ f) -> f x
         (VNeutral f) -> return $ VNeutral (NApp f x)
         (VInd tyName branches) -> do
-            indTy <- case assocMaybe (indTypes state) tyName of
+            (Inductive _ sigs) <- case assocMaybe (indTypes state) tyName of
                 Just indTy -> return indTy
                 Nothing -> Left $ UnknownInductiveType state tyName
-            (consName, consArgs) <- case x of
-                VNeutral n ->
-                    let (consName, consArgsRev) = normalizedArg n in 
-                    return (consName, reverse consArgsRev)
+            case x of
+                VNeutral n -> case normalizedArg n of
+                    Just (consName, consArgsRev) ->
+                        let consArgs = reverse consArgsRev in
+                        case assocMaybe sigs consName of
+                            Just (ConsPoint _ isRecArgs _) -> do
+                                consIndex <- case findIndex ((consName ==) . fst) sigs of
+                                    Just i -> return i
+                                    Nothing -> Left $ error "unreachable"
+
+                                let branch = branches !! (consIndex + 1)
+                                consArgs <- evalConsArgs (zip consArgs isRecArgs)
+
+                                evalBranch branch consArgs
+                            Nothing -> abortEval n
+                    Nothing -> abortEval n
                 _ -> Left $ RecursorArgumentIsNotAConstructor state x
-            let Inductive _ sigs = indTy
-            isRecArgs <- case assocMaybe sigs consName of
-                Just (ConsPoint _ isRecArgs _) -> return isRecArgs
-                Nothing -> Left $ UnknownConstructorForInductive state consName indTy
-            consIndex <- case findIndex ((consName ==) . fst) sigs of
-                Just i -> return i
-                Nothing -> Left $ UnknownConstructorForInductive state consName indTy
 
-            let branch = branches !! (consIndex + 1)
-            consArgs <- evalConsArgs (zip consArgs isRecArgs)
-
-            evalBranch branch consArgs
             where
-                normalizedArg :: Neutral -> (String, [Value])
-                normalizedArg (NVar consName) = (consName, [])
-                normalizedArg (NApp head arg) =
-                    let (consName, headArgs) = normalizedArg head in
-                    (consName, arg : headArgs)
+                abortEval n = return $ VNeutral $ NIndApp tyName branches n
+
+                normalizedArg :: Neutral -> Maybe (String, [Value])
+                normalizedArg (NVar consName) = return (consName, [])
+                normalizedArg (NApp head arg) = do
+                    (consName, headArgs) <- normalizedArg head
+                    return (consName, arg : headArgs)
+                normalizedArg (NIndApp _ _ _) = Nothing
 
                 evalConsArgs :: [(Value, Bool)] -> Result [Value]
                 evalConsArgs [] = return []
@@ -82,6 +87,10 @@ neutral k (NApp f x) = do
     f <- neutral k f
     x <- readback k x
     return (App f x)
+neutral k (NIndApp tyName branches x) = do
+    branches <- mapM (readback k) branches
+    x <- neutral k x
+    return $ App (Ind tyName branches) x
 
 readback :: Int -> Value -> Result Expr
 readback k (VFun _ f) = do
@@ -121,7 +130,7 @@ inferExpr k state (App fun arg) = do
         Right (VPi _ a b) -> return (a, b)
         Right ty -> Left $ CannotTypeAppWithoutPi state (App fun arg) ty
         Left err -> Left err
-    _ <- checkExpr k state arg a
+    arg <- checkExpr k state arg a
     arg <- evalExpr state arg
     b arg -- dependent types!!!
 
@@ -142,24 +151,79 @@ inferExpr k state (Pi x a b) = do
 
 inferExpr _ _ Type = return VType
 inferExpr _ state f@(Fun _ _) = Left $ CannotInferTypeOfFun state f
+inferExpr _ state f@(By  _  ) = Left $ CannotInferTypeOfBy  state f
 inferExpr _ state e@(Ind _ _) = Left $ Unreachable state ("tried to inferExpr " ++ show e)
 
-checkExpr :: Int -> State -> Expr -> Value -> Result ()
+
+checkExpr :: Int -> State -> Expr -> Value -> Result Expr
 checkExpr k state (Fun x e) (VPi _ a b) = do
     let y = VNeutral (NVar (fresh k))
     b <- (b y)
     let state' = addToTEnv state x a
     let state'' = addToEnv state' x y
-    checkExpr (k+1) state'' e b
+    e <- checkExpr (k+1) state'' e b
+    return (Fun x e)
+
+checkExpr k state (By stmts) ty = do
+    (builtExpr, tacRest) <- buildWithTactics k state stmts ty
+    if not (null tacRest)
+        then Left $ RemainingTactics state tacRest
+        else return ()
+    -- termination: buildWithTactics does not produce any By constructors
+    case checkExpr k state builtExpr ty of
+        Right e  -> Right e
+        Left err -> Left $ IncorrectlyBuiltExpression stmts err
+
+
+
 checkExpr k state e t = do
     t' <- inferExpr k state e
     if (veq k t t')
-        then return ()
+        then return e
         else Left $ MismatchedTypes state t t'
+
+
+buildWithTactics :: Int -> State -> [TacticStmt] -> Value -> Result (Expr, [TacticStmt])
+
+
+-- buildWithTactics _ _ stmts ty | trace ("buildWithTactics (" ++ show stmts ++ ", " ++ show ty ++ ")") False = undefined
+buildWithTactics k state (TacIntro names : tacRest) ty = do
+    -- TODO: invalid empty intro
+    buildFun state names ty tacRest
+    where
+        buildFun :: State -> [String] -> Value -> [TacticStmt] -> Result (Expr, [TacticStmt])
+        buildFun state [] ty tacRest = buildWithTactics k state tacRest ty
+        buildFun state (name : nRest) (VPi _ a b) tacRest = do
+            let var = VNeutral (NVar name)
+            b <- (b var)
+            let state' = addToTEnv state name a
+            let state'' = addToEnv state' name var
+            (body, tacRest) <- buildFun state'' nRest b tacRest
+            return (Fun name body, tacRest)
+        buildFun state (name : _) ty _ = Left $ IntroTacticOnNonPi state (TacIntro names) name ty
+
+buildWithTactics k state (TacUse funExpr : tacRest) ty = do
+    fty <- inferExpr k state funExpr
+    buildApp funExpr fty tacRest
+    where
+        buildApp :: Expr -> Value -> [TacticStmt] -> Result (Expr, [TacticStmt])
+        buildApp expr fty tacRest | veq k fty ty = do
+                expr <- checkExpr k state expr ty
+                return (expr, tacRest)
+
+        buildApp funExpr (VPi _ a b) tacRest = do
+            (arg, tacRest) <- buildWithTactics k state tacRest a
+            argVal <- evalExpr state arg
+            b <- b argVal
+            buildApp (App funExpr arg) b tacRest
+
+        buildApp _ fty _ = Left $ MismatchedTypesInUseTactic state ty fty
+
+buildWithTactics _ state [] ty = Left $ UnfilledHole state ty
 
 runStatement :: State -> Stmt -> Result (State, String)
 runStatement state (Axiom name ty) = do
-    _ <- checkExpr 0 state ty VType
+    ty <- checkExpr 0 state ty VType
     ty <- evalExpr state ty
     let msg = "axiom " ++ name ++ ": " ++ show ty
     return (addOpaque state name ty, msg)
@@ -171,7 +235,7 @@ runStatement state (Print expr) = do
     return (state, msg)
 
 runStatement state (IndDecl tyName kind constructors) = do
-    _ <- checkExpr 0 state kind VType
+    kind <- checkExpr 0 state kind VType
     kindVal <- evalExpr state kind
     -- i'm not sure whether doing a readback by reusing the binding
     -- written by the user is actually sound (this is done to 
@@ -215,7 +279,7 @@ runStatement state (IndDecl tyName kind constructors) = do
 
         evalCons :: State -> (String, Expr) -> Result ((String, ConstructorSig), (String, Expr))
         evalCons state (consName, consTy) = do
-            _ <- checkExpr 0 state consTy VType
+            consTy <- checkExpr 0 state consTy VType
             consTyVal <- evalExpr state consTy
             consTy <- readbackShow 0 consTyVal
             (consArgs, consTyArgs) <- linearize consTy
@@ -358,9 +422,9 @@ runStatement state (Declaration name Nothing val) = do
     runDecl state name ty val
 
 runStatement state (Declaration name (Just ty) val) = do
-    _ <- checkExpr 0 state ty VType
+    ty <- checkExpr 0 state ty VType
     ty <- evalExpr state ty
-    _ <- checkExpr 0 state val ty
+    val <- checkExpr 0 state val ty
     runDecl state name ty val
 
 runDecl :: State -> String -> Value -> Expr -> Result (State, String)

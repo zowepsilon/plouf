@@ -10,7 +10,13 @@ data Expr =
   | Pi String Expr Expr
   | Type
   | Ind String [Expr] -- constructed only through readback for type checking
+  | By [TacticStmt]
   deriving Eq
+
+data TacticStmt =
+    TacIntro [String]
+  | TacUse Expr
+  deriving (Show, Eq)
 
 data Stmt =
     Declaration String (Maybe Expr) Expr
@@ -31,6 +37,7 @@ data Value =
 data Neutral =
     NVar String
   | NApp Neutral Value
+  | NIndApp String [Value] Neutral
   deriving Show
 
 data ConstructorSig = ConsPoint [(String, Value)] [Bool] [Value]
@@ -47,6 +54,7 @@ data State = State {
 data Error =
     AppOnNonFun State Value Value
   | CannotInferTypeOfFun State Expr
+  | CannotInferTypeOfBy State Expr
   | MismatchedTypes State Value Value
   | UnknownVariable State String
   | UnknownVariableTyping State String
@@ -58,13 +66,27 @@ data Error =
   | UnknownInductiveType State String
   | RecursorArgumentIsNotAConstructor State Value
   | UnknownConstructorForInductive State String Inductive
+  | UnexpectedTacticForTy State TacticStmt Value
+  | UnfilledHole State Value
+  | RemainingTactics State [TacticStmt]
+  | IncorrectlyBuiltExpression [TacticStmt] Error
+  | IntroTacticOnNonPi State TacticStmt String Value
+  | MismatchedTypesInUseTactic State Value Value
   deriving Show
 
 type Result a = Either Error a
 
 instance Show Expr where
     show (Var x) = x
-    show (Fun x e) = "(fun " ++ x ++ " -> " ++ show e ++ ")"
+    show e@(Fun _ _) =
+        let (args, body) = showFun e in
+        "(fun " ++ (intercalate " " args) ++ " -> " ++ show body ++ ")"
+        where
+            showFun (Fun x e) =
+                let (args, body) = showFun e in
+                (x : args, body)
+            showFun e = ([], e)
+
     show (App f a) = "(" ++ showApp f [a] ++ ")"
         where
             showApp (App f a) tail = showApp f (a : tail)
@@ -78,12 +100,14 @@ instance Show Expr where
     show (Ind tyName args) =
         tyName ++ ".ind " ++ intercalate " " (map show args)
 
+    show (By stmts) = "by  \n    " ++ intercalate "\n    " (map show stmts)
+
     show Type = "Type"
 
 instance Show Value where
     show val = case readbackShow 0 val of
         Right repr -> show repr
-        Left err -> "{error in readback: " ++ show err ++ "}"
+        Left err -> "{error in readbackShow: " ++ show err ++ "}"
 
 
 readbackShow :: Int -> Value -> Result Expr
@@ -94,6 +118,10 @@ neutralShow k (NApp f x) = do
     f <- neutralShow k f
     x <- readbackShow k x
     return (App f x)
+neutralShow k (NIndApp tyName branches x) = do
+    branches <- mapM (readbackShow k) branches
+    x <- neutralShow k x
+    return $ App (Ind tyName branches) x
 
 readbackShow k (VFun displayName f) = do
     let (x, k') = var displayName k
@@ -123,7 +151,7 @@ readbackShow k (VNeutral n) = neutralShow k n
 
 
 instance Show State where
-    show State { env=env, tenv=tenv } = showUnpacked env (reverse tenv)
+    show State { env=env, tenv=tenv } = "\n" ++ showUnpacked env (reverse tenv) ++ "\n"
         where
             showUnpacked :: [(String, Value)] -> [(String, Value)] -> String
             showUnpacked _ [] = ""

@@ -1,4 +1,4 @@
-axiom A: Type
+²axiom A: Type
 
 inductive Eq: (x: A) -> (y: A) -> Type
     refl: (x: A) -> Eq x x

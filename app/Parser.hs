@@ -26,6 +26,7 @@ data Token =
   | KwAxiom
   | KwInductive
   | KwPrint
+  | KwBy
   | Unknown Char
   deriving (Show, Eq)
 
@@ -76,6 +77,7 @@ tokenize (c : rest)
         toKeyword "axiom" = KwAxiom
         toKeyword "inductive" = KwInductive
         toKeyword "print" = KwPrint
+        toKeyword "by" = KwBy
         toKeyword name = Ident name
 
         tokenizeNumLit [] = ([], [])
@@ -108,14 +110,14 @@ ignoreNewline _ tokens = Just tokens
 parseProgram :: String -> Maybe [Stmt]
 parseProgram = parseProgramTok . tokenize
 
-
 parseProgramTok :: [Token] -> Maybe [Stmt]
-parseStmt       :: IndentLevel -> [Token] -> Maybe (Stmt, [Token])
+parseStmt       :: IndentLevel -> [Token] -> Maybe (Stmt,         [Token])
 parseAnnot      :: IndentLevel -> [Token] -> Maybe (String, Expr, [Token])
-parseExpr       :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
-parsePiExpr     :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
-parseApp        :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
-parsePrimary    :: IndentLevel -> [Token] -> Maybe (Expr, [Token])
+parseExpr       :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
+parsePiExpr     :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
+parseApp        :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
+parsePrimary    :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
+parseTactic     :: IndentLevel -> [Token] -> Maybe (TacticStmt,   [Token])
 
 
 parseProgramTok [] = Just []
@@ -231,6 +233,29 @@ parseExpr l tokens@(ParenOpen : rest) = do
             rest <- ignoreNewline l rest
             return (var, rest)
             
+parseExpr l (KwBy : rest) = do
+    rest <- ignoreNewline l rest
+    (stmts, rest) <- parseTactics rest
+    return (By stmts, rest)
+
+    where
+        parseTactics :: [Token] -> Maybe ([TacticStmt], [Token])
+        parseTactics (Newline i : rest) =
+            if l <= i
+            then parseTactics rest
+            else return ([], rest)
+        parseTactics rest = do
+            (tactic, rest) <- parseTactic l rest
+            case rest of
+                [] -> return ([tactic], rest)
+                Newline i : rest ->
+                    if l <= i
+                        then do
+                            (tail, rest) <- parseTactics rest
+                            return (tactic : tail, rest)
+                        else return ([tactic], rest)
+                _ -> Nothing
+
 parseExpr l tokens = parsePiExpr l tokens
 
 parsePiExpr l tokens | enableDebug && trace ("parsePiExpr " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
@@ -271,3 +296,26 @@ parsePrimary l (ParenOpen : rest) = do
     return (inner, rest)
 parsePrimary _ (KwType : rest) = return (Type, rest)
 parsePrimary _ _ = Nothing
+
+parseTactic l (Ident "intro" : rest) = do
+    rest <- ignoreNewline (l+indentOffset) rest
+    (names, rest) <- nameList rest
+    return (TacIntro names, rest)
+    
+    where
+        nameList (Ident name : rest) = do
+            (tail, rest) <- nameList rest
+            return (name : tail, rest)
+
+        nameList toks@(Newline i  : rest) =
+            if (l+indentOffset) <= i
+            then nameList rest
+            else return ([], toks)
+        nameList _ = Nothing
+
+parseTactic l (Ident "use" : rest) = do
+    rest <- ignoreNewline (l+indentOffset) rest
+    (expr, rest) <- parseExpr (l+indentOffset) rest
+    return (TacUse expr, rest)
+
+parseTactic _ _ = Nothing
