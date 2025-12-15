@@ -15,6 +15,7 @@ data Token =
   | Eq
   | Dash
   | Arrow
+  | Semicolon
   | Newline Int
   | ParenOpen
   | ParenClose
@@ -46,6 +47,7 @@ tokenize (':'     : rest) = Colon : tokenize rest
 tokenize ('='     : rest) = Eq : tokenize rest
 tokenize ('-':'>' : rest) = Arrow : tokenize rest
 tokenize ('-'     : rest) = Dash : tokenize rest
+tokenize (';'     : rest) = Semicolon : tokenize rest
 tokenize ('\n'    : rest) = (Newline indent) : tokenize rest'
     where
         (indent, rest') = countIndent 0 rest
@@ -266,8 +268,6 @@ parseExpr l (KwBy : rest) = do
     (stmts, rest) <- parseTactics l rest
     return (By stmts, rest)
 
-    where
-
 parseExpr l tokens = parsePiExpr l tokens
 
 parsePiExpr l tokens | enableDebug && trace ("parsePiExpr " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
@@ -310,6 +310,7 @@ parsePrimary _ (KwType : rest) = return (Type, rest)
 parsePrimary _ _ = Nothing
 
 parseTactics l tokens | enableDebug && trace ("parseTactics " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parseTactics l (Semicolon : rest) = parseTactics l rest
 parseTactics l (Newline i : rest) =
     if l <= i
     then parseTactics l rest
@@ -318,6 +319,9 @@ parseTactics l rest = do
     (tactics, rest) <- parseTactic l rest
     case rest of
         [] -> return (tactics, rest)
+        Semicolon : rest -> do
+            (tail, rest) <- parseTactics l rest
+            return (tactics ++ tail, rest)
         Newline i : rest ->
             if l <= i
                 then do
@@ -340,7 +344,8 @@ parseTactic l (Ident "intro" : rest) = do
         nameList (Ident name : rest) = do
             (tail, rest) <- nameList rest
             return (name : tail, rest)
-
+        
+        nameList toks@(Semicolon:_) = return ([], toks)
         nameList toks@(Newline i  : rest) =
             if (l+indentOffset) <= i
             then nameList rest
