@@ -15,10 +15,8 @@ is_ff: Bool -> Type := fun b -> (eq Bool b ff)
 
 bool_is_two: (b: Bool) -> or (is_tt b) (is_ff b) := by
   induction
-  - left (is_tt tt) (is_ff tt)
-    refl Bool tt
-  - right (is_tt ff) (is_ff ff)
-    refl Bool ff
+  - left (is_tt tt) (is_ff tt); refl Bool tt
+  - right (is_tt ff) (is_ff ff); refl Bool ff
 
 
 print bool_is_two
