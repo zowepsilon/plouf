@@ -7,7 +7,7 @@ data Expr =
     Var String
   | Fun String Expr
   | App Expr Expr
-  | Pi String Expr Expr
+  | Pi String Bool Expr Expr
   | Type
   | Ind String [Expr] -- constructed only through readback for type checking
   | By [TacticStmt]
@@ -27,7 +27,7 @@ data Stmt =
 
 data Value =
     VFun (Maybe String) (Value -> Result Value)
-  | VPi (Maybe String) Value (Value -> Result Value)
+  | VPi (Maybe String) Bool Value (Value -> Result Value)
   | VType
   --     induction type name
   --            branches
@@ -51,28 +51,30 @@ data State = State {
         indTypes :: Assoc String Inductive
     }
 
-data Error =
-    AppOnNonFun State Value Value
-  | CannotInferTypeOfFun State Expr
-  | CannotInferTypeOfBy State Expr
-  | MismatchedTypes State Value Value
-  | UnknownVariable State String
-  | UnknownVariableTyping State String
-  | CannotTypeAppWithoutPi State Expr Value
-  | NonTypeInPiArgType State Expr Value
-  | NonTypeInductiveKind State Expr
-  | InvalidConstructorType State Expr
-  | Unreachable State String
-  | UnknownInductiveType State String
-  | RecursorArgumentIsNotAConstructor State Value
-  | UnknownConstructorForInductive State String Inductive
-  | UnexpectedTacticForTy State TacticStmt Value
-  | UnfilledHole State Value
-  | RemainingTactics State [TacticStmt]
-  | IncorrectlyBuiltExpression [TacticStmt] Error
-  | IntroTacticOnNonPi State TacticStmt String Value
-  | MismatchedTypesInUseTactic State Value Value
-  deriving Show
+data Error
+    = AppOnNonFun State Value Value
+    | CannotInferTypeOfFun State Expr
+    | CannotInferTypeOfBy State Expr
+    | MismatchedTypes State Value Value
+    | UnknownVariable State String
+    | UnknownVariableTyping State String
+    | CannotTypeAppWithoutPi State Expr Value
+    | NonTypeInPiArgType State Expr Value
+    | NonTypeInductiveKind State Expr
+    | InvalidConstructorType State Expr
+    | Unreachable State String
+    | UnknownInductiveType State String
+    | RecursorArgumentIsNotAConstructor State Value
+    | UnknownConstructorForInductive State String Inductive
+    | UnexpectedTacticForTy State TacticStmt Value
+    | UnfilledHole State Value
+    | RemainingTactics State [TacticStmt]
+    | IncorrectlyBuiltExpression [TacticStmt] Error
+    | IntroTacticOnNonPi State TacticStmt String Value
+    | MismatchedTypesInUseTactic State Value Value
+    | UnificationFailure Expr Expr
+    | UnconstraintedImplicitArg Value Expr
+    deriving Show
 
 type Result a = Either Error a
 
@@ -92,10 +94,16 @@ instance Show Expr where
             showApp (App f a) tail = showApp f (a : tail)
             showApp fun args = show fun ++ " " ++ intercalate " " (map show args)
 
-    show (Pi "_" t@(Fun _ _)  b) = "(" ++ show t ++ ") -> " ++ show b
-    show (Pi "_" t@(Pi _ _ _) b) = "(" ++ show t ++ ") -> " ++ show b
-    show (Pi "_" t            b) = show t ++ " -> " ++ show b
-    show (Pi a   t            b) = "(" ++ a ++ ": " ++ show t ++ ") -> " ++ show b
+    show (Pi "_" False t@(Fun _ _) b) = "(" ++ show t ++ ") -> " ++ show b
+    show (Pi "_" True  t@(Fun _ _) b) = "{" ++ show t ++ "} -> " ++ show b
+
+    show (Pi "_" False t@(Pi _ _ _ _) b) = "(" ++ show t ++ ") -> " ++ show b
+    show (Pi "_" True  t@(Pi _ _ _ _) b) = "{" ++ show t ++ "} -> " ++ show b
+
+    show (Pi "_" _ t b) = show t ++ " -> " ++ show b
+
+    show (Pi a False t b) = "(" ++ a ++ ": " ++ show t ++ ") -> " ++ show b
+    show (Pi a True  t b) = "{" ++ a ++ ": " ++ show t ++ "} -> " ++ show b
     
     show (Ind tyName args) =
         tyName ++ ".ind " ++ intercalate " " (map show args)
@@ -132,12 +140,12 @@ readbackShow k (VFun displayName f) = do
         var (Just name) k = (name, k)
         var (Nothing)   k = (fresh k, k+1)
 
-readbackShow k (VPi displayName a b) = do
+readbackShow k (VPi displayName implicit a b) = do
     let (x, k') = var displayName k
     b <- b (VNeutral $ NVar x)
     b <- readbackShow k' b
     a <- readbackShow k a
-    return (Pi x a b)
+    return (Pi x implicit a b)
     where
         var (Just name) k = (name, k)
         var (Nothing)   k = (fresh k, k+1)

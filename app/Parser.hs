@@ -19,6 +19,8 @@ data Token =
   | ParenClose
   | SqBraOpen
   | SqBraClose
+  | CuBraOpen
+  | CuBraClose
   | Ident String
   | NumLit Integer
   | KwFun
@@ -52,6 +54,8 @@ tokenize ('('     : rest) = ParenOpen  : tokenize rest
 tokenize (')'     : rest) = ParenClose : tokenize rest
 tokenize ('['     : rest) = SqBraOpen  : tokenize rest
 tokenize (']'     : rest) = SqBraClose : tokenize rest
+tokenize ('{'     : rest) = CuBraOpen  : tokenize rest
+tokenize ('}'     : rest) = CuBraClose : tokenize rest
 tokenize ('/':'/' : rest) = tokenize (skipLine rest)
     where skipLine [] = []
           skipLine ('\n' : rest) = rest
@@ -222,7 +226,7 @@ parseExpr l tokens@(ParenOpen : rest) = do
             rest <- ignoreNewline l rest
             (ret_ty, rest) <- parseExpr l rest
 
-            return (Pi var arg_ty ret_ty, rest)
+            return (Pi var False arg_ty ret_ty, rest)
         Nothing -> parsePiExpr l tokens
     where
         tryPiType rest = do
@@ -232,6 +236,27 @@ parseExpr l tokens@(ParenOpen : rest) = do
             (Colon : rest) <- return rest
             rest <- ignoreNewline l rest
             return (var, rest)
+
+parseExpr l (CuBraOpen : rest) = do
+    rest <- ignoreNewline l rest
+    (Ident var : rest) <- return rest
+
+    rest <- ignoreNewline l rest
+    (Colon : rest) <- return rest
+
+    rest <- ignoreNewline l rest
+    (arg_ty, rest) <- parseExpr l rest
+
+    rest <- ignoreNewline l rest
+    (CuBraClose : rest) <- return rest
+
+    rest <- ignoreNewline l rest
+    (Arrow : rest) <- return rest
+
+    rest <- ignoreNewline l rest
+    (ret_ty, rest) <- parseExpr l rest
+
+    return (Pi var True arg_ty ret_ty, rest)
             
 parseExpr l (KwBy : rest) = do
     rest <- ignoreNewline l rest
@@ -264,10 +289,10 @@ parsePiExpr l tokens = do
     case rest of
         (Newline i : Arrow : rest) | l <= i -> do
             (right, rest) <- parseExpr l rest
-            return (Pi "_" left right, rest)
+            return (Pi "_" False left right, rest)
         (Arrow : rest) -> do
             (right, rest) <- parseExpr l rest
-            return (Pi "_" left right, rest)
+            return (Pi "_" False left right, rest)
         _ -> return (left, rest)
 
 parseApp l tokens | enableDebug && trace ("parseApp " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined

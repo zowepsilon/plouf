@@ -19,9 +19,9 @@ evalExpr state (App f x)   = do
     x <- evalExpr state x
     evalAppVal state f x
 
-evalExpr state (Pi x t e)  = do
+evalExpr state (Pi x implicit t e)  = do
     t <- evalExpr state t
-    return $ VPi (Just x) t (\v -> evalExpr (addToEnv state x v) e)
+    return $ VPi (Just x) implicit t (\v -> evalExpr (addToEnv state x v) e)
 
 evalExpr state e@(Ind _ _) = Left $ Unreachable state ("tried to evalExpr " ++ show e)
 evalExpr state e@(By _)    = Left $ Unreachable state ("tried to evalExpr " ++ show e)
@@ -72,7 +72,7 @@ evalAppVal state f x =
                     prev <- evalAppVal state f arg
                     rest <- evalConsArgs rest
                     return (arg : prev : rest)
-                
+
                 evalBranch :: Value -> [Value] -> Result Value
                 evalBranch val [] = return val
                 evalBranch val (arg : rest) = do
@@ -99,12 +99,12 @@ readback k (VFun _ f) = do
     f <- readback (k+1) f
     return (Fun x f)
 
-readback k (VPi _ a b) = do
+readback k (VPi _ _ a b) = do
     let x = fresh k
     b <- b (VNeutral $ NVar x)
     b <- readback (k+1) b
     a <- readback k a
-    return (Pi x a b)
+    return (Pi x False a b)
 
 readback _ VType = return Type
 
@@ -125,16 +125,17 @@ inferExpr _ state (Var x) =
     case assocMaybe (tenv state) x of
         Just ty -> return ty
         Nothing -> Left $ UnknownVariableTyping state x
-inferExpr k state (App fun arg) = do
-    (a, b) <- case inferExpr k state fun of
-        Right (VPi _ a b) -> return (a, b)
+
+inferExpr k state (App fun arg) =
+    case inferExpr k state fun of
+        Right (VPi _ _ a b) -> do
+            arg <- checkExpr k state arg a
+            arg <- evalExpr state arg
+            b arg -- dependent types!!!
         Right ty -> Left $ CannotTypeAppWithoutPi state (App fun arg) ty
         Left err -> Left err
-    arg <- checkExpr k state arg a
-    arg <- evalExpr state arg
-    b arg -- dependent types!!!
 
-inferExpr k state (Pi x a b) = do
+inferExpr k state (Pi x _ a b) = do
     case inferExpr k state a of
         Right VType -> return ()
         Right ty -> Left $ NonTypeInPiArgType state a ty
@@ -156,7 +157,9 @@ inferExpr _ state e@(Ind _ _) = Left $ Unreachable state ("tried to inferExpr " 
 
 
 checkExpr :: Int -> State -> Expr -> Value -> Result Expr
-checkExpr k state (Fun x e) (VPi _ a b) = do
+
+checkExpr _ state expr ty | traceShow ("checkExpr", expr, ty) False = undefined
+checkExpr k state (Fun x e) (VPi _ _ a b) = do
     let y = VNeutral (NVar (fresh k))
     b <- (b y)
     let state' = addToTEnv state x a
@@ -174,7 +177,19 @@ checkExpr k state (By stmts) ty = do
         Right e  -> Right e
         Left err -> Left $ IncorrectlyBuiltExpression stmts err
 
-
+-- checkExpr k state (App f x) expectedTy =
+--     case assocMaybe (tenv state) x of
+--         Just foundTy@(VPi _ True argType retType) -> do
+--             traceM ("fetching implicit fun " ++ x ++ ": " ++ show foundTy)
+--             implicitArg <- inferImplicitArg k expectedTy argType retType
+--             implicitCall <- checkExpr (k+1) state (App (Var x) implicitArg) expectedTy
+--             return implicitCall
+--             
+--         Just foundTy ->
+--             if (veq k expectedTy foundTy)
+--                 then return (Var x)
+--                 else Left $ MismatchedTypes state expectedTy foundTy
+--         Nothing -> Left $ UnknownVariableTyping state x
 
 checkExpr k state e t = do
     t' <- inferExpr k state e
@@ -183,8 +198,62 @@ checkExpr k state e t = do
         else Left $ MismatchedTypes state t t'
 
 
-buildWithTactics :: Int -> State -> [TacticStmt] -> Value -> Result (Expr, [TacticStmt])
+inferImplicitArg :: Int -> Value -> Value -> (Value -> Result Value) -> Result Expr
+inferImplicitArg k expectedTy argTy retTy = do
+    let varName = fresh k
+    let var = VNeutral (NVar varName)
+    retTy <- (retTy var)
+    expectedTy <- readback (k+1) expectedTy
+    retTy <- readback (k+1) retTy
+    arg <- unifySingleVar varName retTy expectedTy
+    case arg of
+        Just arg -> return arg
+        Nothing -> Left $ UnconstraintedImplicitArg argTy expectedTy
 
+    where
+        unifySingleVar :: String -> Expr -> Expr -> Result (Maybe Expr)
+        unifySingleVar varName (Var x) expr | (x == varName) = return $ Just expr
+        unifySingleVar varName expr (Var x) | (x == varName) = return $ Just expr
+        unifySingleVar _ (Var x) (Var x') =
+            if x == x' then return Nothing else Left $ UnificationFailure (Var x) (Var x')
+        
+        unifySingleVar varName (Fun x e) (Fun x' e') = do
+            if x == x' then return () else Left $ UnificationFailure (Fun x e) (Fun x' e')
+            unifySingleVar varName e e'
+
+        unifySingleVar varName (App e1 e2) (App e1' e2') = do
+            arg <- unifySingleVar varName e1 e1'
+            case arg of
+                Just arg -> return (Just arg)
+                Nothing -> unifySingleVar varName e2 e2'
+
+        unifySingleVar varName e@(Pi x _ a b) e'@(Pi x' _ a' b') = do
+            if x == x' then return () else Left $ UnificationFailure e e'
+            arg <- unifySingleVar varName a a'
+            case arg of
+                Just arg -> return (Just arg)
+                Nothing -> unifySingleVar varName b b'
+        
+        unifySingleVar _ Type Type = return Nothing
+        unifySingleVar varName e@(Ind tyName args) e'@(Ind tyName' args') = do
+            if tyName == tyName' then return () else Left $ UnificationFailure e e'
+            unifyIndArgs varName e e' args args'
+
+        unifySingleVar _ e e' = Left $ UnificationFailure e e'
+        
+        unifyIndArgs :: String -> Expr -> Expr -> [Expr] -> [Expr] -> Result (Maybe Expr)
+        unifyIndArgs _ _ _ [] [] = return Nothing
+        unifyIndArgs _ e e' [] _ = Left $ UnificationFailure e e'
+        unifyIndArgs _ e e' _ [] = Left $ UnificationFailure e e'
+
+        unifyIndArgs varName e e' (a : rest) (a' : rest') = do
+            arg <- unifySingleVar varName a a'
+            case arg of
+                Just arg -> return (Just arg)
+                Nothing -> unifyIndArgs varName e e' rest rest'
+
+
+buildWithTactics :: Int -> State -> [TacticStmt] -> Value -> Result (Expr, [TacticStmt])
 
 -- buildWithTactics _ _ stmts ty | trace ("buildWithTactics (" ++ show stmts ++ ", " ++ show ty ++ ")") False = undefined
 buildWithTactics k state (TacIntro names : tacRest) ty = do
@@ -193,7 +262,7 @@ buildWithTactics k state (TacIntro names : tacRest) ty = do
     where
         buildFun :: State -> [String] -> Value -> [TacticStmt] -> Result (Expr, [TacticStmt])
         buildFun state [] ty tacRest = buildWithTactics k state tacRest ty
-        buildFun state (name : nRest) (VPi _ a b) tacRest = do
+        buildFun state (name : nRest) (VPi _ _ a b) tacRest = do
             let var = VNeutral (NVar name)
             b <- (b var)
             let state' = addToTEnv state name a
@@ -211,7 +280,7 @@ buildWithTactics k state (TacUse funExpr : tacRest) ty = do
                 expr <- checkExpr k state expr ty
                 return (expr, tacRest)
 
-        buildApp funExpr (VPi _ a b) tacRest = do
+        buildApp funExpr (VPi _ _ a b) tacRest = do
             (arg, tacRest) <- buildWithTactics k state tacRest a
             argVal <- evalExpr state arg
             b <- b argVal
@@ -271,7 +340,7 @@ runStatement state (IndDecl tyName kind constructors) = do
 
     where
         getKindArgs :: Expr -> Result [(String, Expr)]
-        getKindArgs (Pi a t b) = do
+        getKindArgs (Pi a _ t b) = do
             args <- getKindArgs b
             return $ (a, t) : args
         getKindArgs Type = return []
@@ -288,7 +357,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             return ((consName, ConsPoint consArgs [] consTyArgs), (consName, consTy))
         
         linearize :: Expr -> Result ([(String, Expr)], [Expr])
-        linearize (Pi a t b) = do
+        linearize (Pi a _ t b) = do -- TODO: implicit
             (args, tail) <- linearize b
             return ((a, t) : args, tail)
         linearize consTy = do
@@ -316,6 +385,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             (
                 Pi
                 "_"
+                False
                 (foldl
                     (\fun argName -> App fun $ Var argName)
                     tyNameVar
@@ -329,7 +399,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             let (tail, k'') = predicateType k' tyName (var : kindArgNames) rest in
             -- isn't there a bit more bookkeeping to do if arrows are dependent?
             --                        \/ here
-            (Pi var argType tail, k'')
+            (Pi var False argType tail, k'')
     
         consInductionArgType ::
             Int -> String -> String -> ConstructorSig 
@@ -358,15 +428,15 @@ runStatement state (IndDecl tyName kind constructors) = do
                     let predicateNameVar = Var predicateName
                     let predicatePartialInstance = foldl App predicateNameVar argTypeArgs
                     let predicateInstance = App predicatePartialInstance (Var var)
-                    let tail' = Pi "_" predicateInstance tail
-                    return (Pi var argType tail', k'', True : isRecTail)
+                    let tail' = Pi "_" False predicateInstance tail
+                    return (Pi var False argType tail', k'', True : isRecTail)
 
                 consInductionArgTypeIsNotInd :: Result (Expr, Int, [Bool])
                 consInductionArgTypeIsNotInd = do
                     let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k)
                     (tail, k'', isRecTail) <- consInductionArgType k' predicateName consName consSig (var : argNames) rest
                     -- same objection as in predicateType
-                    return (Pi var argType tail, k'', False : isRecTail)
+                    return (Pi var False argType tail, k'', False : isRecTail)
             
                 consInductionArgTypeArgs :: String -> Expr -> Maybe [Expr]
                 consInductionArgTypeArgs tyName (Var f) | f == tyName = Just []
@@ -380,7 +450,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             let (pTy, _) = predicateType 0 tyName [] kindArgs
             (tail, _, isRecArgsList) <- inductionTypeCases 0 consSigs
             let consSigs' = map (\((consName, ConsPoint consArgs _ kindArgs), isRecArgs) -> (consName, ConsPoint consArgs isRecArgs kindArgs)) (zip consSigs isRecArgsList)
-            return (Pi "P" pTy tail, consSigs')
+            return (Pi "P" False pTy tail, consSigs')
 
             where
                 inductionTypeCases :: Int -> [(String, ConstructorSig)] -> Result (Expr, Int, [[Bool]])
@@ -394,7 +464,7 @@ runStatement state (IndDecl tyName kind constructors) = do
                             return (name, val)
                         ) consArgs
                     (head, k'', isRecArgs) <- consInductionArgType k' "P" consName consSig [] consArgs
-                    return (Pi "_" head tail, k'', isRecArgs : isRecArgsTail)
+                    return (Pi "_" False head tail, k'', isRecArgs : isRecArgsTail)
 
                 inductionTypeTail :: Int -> [String] -> [(String, Expr)]  -> (Expr, Int, [[Bool]])
                 inductionTypeTail k kindArgNames [] =
@@ -402,11 +472,11 @@ runStatement state (IndDecl tyName kind constructors) = do
                     let tyNameVar = Var tyName in
                     let valTail = foldl (\fun argName -> App fun $ Var argName) tyNameVar (reverse kindArgNames) in
                     let predTail = foldl (\fun argName -> App fun $ Var argName) (Var "P") (reverse $ var : kindArgNames) in
-                    (Pi var valTail predTail, k+1, [])
+                    (Pi var False valTail predTail, k+1, [])
                 inductionTypeTail k kindArgNames ((argName, argType) : rest) =
                     let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k) in
                     let (tail, k'', _) = inductionTypeTail k' (var : kindArgNames) rest in
-                    (Pi var argType tail, k'', [])
+                    (Pi var False argType tail, k'', [])
         
         inductionClosure :: String -> Int -> Value
         inductionClosure tyName arity =

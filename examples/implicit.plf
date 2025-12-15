@@ -1,0 +1,8 @@
+id: {A: Type} -> A -> A :=
+    fun A x -> x
+
+
+axiom T: Type
+axiom t: T
+
+hello: T := id t
