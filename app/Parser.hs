@@ -13,6 +13,7 @@ data Token =
     ColonEq
   | Colon
   | Eq
+  | Dash
   | Arrow
   | Newline Int
   | ParenOpen
@@ -42,6 +43,7 @@ tokenize (':':'=' : rest) = ColonEq : tokenize rest
 tokenize (':'     : rest) = Colon : tokenize rest
 tokenize ('='     : rest) = Eq : tokenize rest
 tokenize ('-':'>' : rest) = Arrow : tokenize rest
+tokenize ('-'     : rest) = Dash : tokenize rest
 tokenize ('\n'    : rest) = (Newline indent) : tokenize rest'
     where
         (indent, rest') = countIndent 0 rest
@@ -92,7 +94,7 @@ tokenize (c : rest)
 type IndentLevel = Int
 
 indentOffset :: IndentLevel
-indentOffset = 4
+indentOffset = 2
 
 checkNewline :: IndentLevel -> IndentLevel -> Maybe ()
 checkNewline l i =
@@ -117,7 +119,8 @@ parseExpr       :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
 parsePiExpr     :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
 parseApp        :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
 parsePrimary    :: IndentLevel -> [Token] -> Maybe (Expr,         [Token])
-parseTactic     :: IndentLevel -> [Token] -> Maybe (TacticStmt,   [Token])
+parseTactics    :: IndentLevel -> [Token] -> Maybe ([TacticStmt], [Token])
+parseTactic     :: IndentLevel -> [Token] -> Maybe ([TacticStmt], [Token])
 
 
 parseProgramTok [] = Just []
@@ -235,26 +238,10 @@ parseExpr l tokens@(ParenOpen : rest) = do
             
 parseExpr l (KwBy : rest) = do
     rest <- ignoreNewline l rest
-    (stmts, rest) <- parseTactics rest
+    (stmts, rest) <- parseTactics l rest
     return (By stmts, rest)
 
     where
-        parseTactics :: [Token] -> Maybe ([TacticStmt], [Token])
-        parseTactics (Newline i : rest) =
-            if l <= i
-            then parseTactics rest
-            else return ([], rest)
-        parseTactics rest = do
-            (tactic, rest) <- parseTactic l rest
-            case rest of
-                [] -> return ([tactic], rest)
-                Newline i : rest ->
-                    if l <= i
-                        then do
-                            (tail, rest) <- parseTactics rest
-                            return (tactic : tail, rest)
-                        else return ([tactic], rest)
-                _ -> Nothing
 
 parseExpr l tokens = parsePiExpr l tokens
 
@@ -297,10 +284,32 @@ parsePrimary l (ParenOpen : rest) = do
 parsePrimary _ (KwType : rest) = return (Type, rest)
 parsePrimary _ _ = Nothing
 
+parseTactics l tokens | enableDebug && trace ("parseTactics " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parseTactics l (Newline i : rest) =
+    if l <= i
+    then parseTactics l rest
+    else return ([], rest)
+parseTactics l rest = do
+    (tactics, rest) <- parseTactic l rest
+    case rest of
+        [] -> return (tactics, rest)
+        Newline i : rest ->
+            if l <= i
+                then do
+                    (tail, rest) <- parseTactics l rest
+                    return (tactics ++ tail, rest)
+                else return (tactics, Newline i : rest)
+        _ -> Nothing
+
+
+parseTactic l tokens | enableDebug && trace ("parseTactic " ++ show l ++ " " ++ show (listToMaybe tokens)) False = undefined
+parseTactic l (Dash : rest) = do
+    parseTactics (l+indentOffset) rest
+
 parseTactic l (Ident "intro" : rest) = do
     rest <- ignoreNewline (l+indentOffset) rest
     (names, rest) <- nameList rest
-    return (TacIntro names, rest)
+    return ([TacIntro names], rest)
     
     where
         nameList (Ident name : rest) = do
@@ -313,9 +322,10 @@ parseTactic l (Ident "intro" : rest) = do
             else return ([], toks)
         nameList _ = Nothing
 
-parseTactic l (Ident "use" : rest) = do
+parseTactic _ (Ident "induction" : rest) =
+    return ([TacInduction], rest)
+
+parseTactic l rest = do
     rest <- ignoreNewline (l+indentOffset) rest
     (expr, rest) <- parseExpr (l+indentOffset) rest
-    return (TacUse expr, rest)
-
-parseTactic _ _ = Nothing
+    return ([TacUse expr], rest)
