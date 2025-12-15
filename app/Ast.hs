@@ -16,6 +16,7 @@ data Expr =
 data TacticStmt =
     TacIntro [String]
   | TacUse Expr
+  | TacInduction
   deriving (Show, Eq)
 
 data Stmt =
@@ -74,6 +75,7 @@ data Error
     | MismatchedTypesInUseTactic State Value Value
     | UnificationFailure Expr Expr
     | UnconstraintedImplicitArg Value Expr
+    | CannotUseInductionTactic State Value
     deriving Show
 
 type Result a = Either Error a

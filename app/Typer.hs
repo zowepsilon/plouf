@@ -288,6 +288,14 @@ buildWithTactics k state (TacUse funExpr : tacRest) ty = do
 
         buildApp _ fty _ = Left $ MismatchedTypesInUseTactic state ty fty
 
+buildWithTactics k state (TacInduction : tacRest) ty = do
+    tyExpr <- readback k ty
+    case tyExpr of
+        (Pi x (Var tyName) b) ->
+            let indTac = TacUse $ App (Var $ tyName ++ ".ind") (Fun x b) in
+            buildWithTactics k state (indTac : tacRest) ty
+        _ -> Left $ CannotUseInductionTactic state ty
+
 buildWithTactics _ state [] ty = Left $ UnfilledHole state ty
 
 runStatement :: State -> Stmt -> Result (State, String)
