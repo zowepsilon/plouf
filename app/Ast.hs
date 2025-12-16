@@ -74,7 +74,7 @@ data Error
     | IntroTacticOnNonPi State TacticStmt String Value
     | MismatchedTypesInUseTactic State Value Value
     | UnificationFailure Expr Expr
-    | UnconstraintedImplicitArg Value Expr
+    | UnconstraintedImplicitArg String Expr [Result Expr] [Expr]
     | CannotUseInductionTactic State Value
     deriving Show
 

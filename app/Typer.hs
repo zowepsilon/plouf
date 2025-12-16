@@ -177,80 +177,124 @@ checkExpr k state (By stmts) ty = do
         Right e  -> Right e
         Left err -> Left $ IncorrectlyBuiltExpression stmts err
 
--- checkExpr k state (App f x) expectedTy =
---     case assocMaybe (tenv state) x of
---         Just foundTy@(VPi _ True argType retType) -> do
---             traceM ("fetching implicit fun " ++ x ++ ": " ++ show foundTy)
---             implicitArg <- inferImplicitArg k expectedTy argType retType
---             implicitCall <- checkExpr (k+1) state (App (Var x) implicitArg) expectedTy
---             return implicitCall
---             
---         Just foundTy ->
---             if (veq k expectedTy foundTy)
---                 then return (Var x)
---                 else Left $ MismatchedTypes state expectedTy foundTy
---         Nothing -> Left $ UnknownVariableTyping state x
+checkExpr k state (Var x) expectedTy = do
+    case assocMaybe (tenv state) x of
+        Nothing -> Left $ UnknownVariableTyping state x
+        Just funTy@(VPi _ True _ _) -> do
+            funTy <- readbackShow k funTy
+            expectedTyExpr <- readbackShow k expectedTy
+            let concreteTypes = [Right expectedTyExpr]
+            let (iArgs, sigTypes) = argTypes funTy
+            inferredFunExpr <- inferImplicitArg (Var x) iArgs concreteTypes sigTypes
+            checkByInferExpr k state inferredFunExpr expectedTy
 
-checkExpr k state e t = do
+        Just ty -> checkByInferExpr k state (Var x) ty
+
+checkExpr k state (App f x) expectedTy = do
+    let (funExpr, revArgs) = unfoldCall f x
+    let args = reverse revArgs
+    case inferExpr k state funExpr of
+        Right (VPi _ False _ _) -> checkByInferExpr k state (App f x) expectedTy
+        Right funTy@(VPi _ True _ _) -> do
+            funTy <- readbackShow k funTy
+            expectedTyExpr <- readbackShow k expectedTy
+            let concreteTypes = (map (\arg -> inferExpr k state arg >>= readbackShow k) args) ++ [Right expectedTyExpr]
+            let (iArgs, sigTypes) = argTypes funTy
+            inferredFunExpr <- inferImplicitArg funExpr iArgs concreteTypes sigTypes
+            let inferredAppExpr = reconstructApps inferredFunExpr args
+            checkByInferExpr k state inferredAppExpr expectedTy
+            
+        Right ty -> Left $ CannotTypeAppWithoutPi state (App f x) ty
+        Left err -> Left err
+        
+
+
+checkExpr k state e t = checkByInferExpr k state e t
+
+checkByInferExpr k state e t = do
     t' <- inferExpr k state e
     if (veq k t t')
         then return e
         else Left $ MismatchedTypes state t t'
 
+reconstructApps fun [] = fun
+reconstructApps fun (arg : rest) = reconstructApps (App fun arg) rest
 
-inferImplicitArg :: Int -> Value -> Value -> (Value -> Result Value) -> Result Expr
-inferImplicitArg k expectedTy argTy retTy = do
-    let varName = fresh k
-    let var = VNeutral (NVar varName)
-    retTy <- (retTy var)
-    expectedTy <- readback (k+1) expectedTy
-    retTy <- readback (k+1) retTy
-    arg <- unifySingleVar varName retTy expectedTy
+unfoldCall :: Expr -> Expr -> (Expr, [Expr])
+unfoldCall (App f x) y =
+    let (fun, args) = unfoldCall f x in
+    (fun, y : args)
+unfoldCall f x = (f, [x])
+
+argTypes :: Expr -> ([(String, Expr)], [Expr])
+argTypes (Pi x True a b) =
+    let (iArgs, eArgTypes) = argTypes b in
+    ((x, a) : iArgs, eArgTypes)
+argTypes ty = ([], explicitArgTypesTail ty)
+
+explicitArgTypesTail (Pi x _ a b) = a : explicitArgTypesTail b
+explicitArgTypesTail ty = [ty]
+
+inferImplicitArg :: Expr -> [(String, Expr)] -> [Result Expr] -> [Expr] -> Result Expr
+inferImplicitArg funExpr [] _ _ = return funExpr
+inferImplicitArg funExpr ((varName, varTy) : iArgsRest) concreteTypes sigTypes = do
+    implicitArg <- tryUnify varName concreteTypes sigTypes
+    case implicitArg of
+        Nothing -> Left $ UnconstraintedImplicitArg varName varTy concreteTypes sigTypes
+        Just arg -> do
+            inferImplicitArg (App funExpr arg) iArgsRest concreteTypes sigTypes
+
+tryUnify :: String -> [Result Expr] -> [Expr] -> Result (Maybe Expr)
+tryUnify varName [] [] = return Nothing
+tryUnify varName (Right ccTy : concreteTypesRest) (sgTy : sigTypesRest) = do
+    maybeArg <- unifySingleVar varName ccTy sgTy
+    case maybeArg of
+        Just arg -> return (Just arg)
+        Nothing -> tryUnify varName concreteTypesRest sigTypesRest
+
+tryUnify varName (Left _ : concreteTypesRest) (_ : sigTypesRest) =
+    tryUnify varName concreteTypesRest sigTypesRest
+
+
+unifySingleVar :: String -> Expr -> Expr -> Result (Maybe Expr)
+unifySingleVar varName (Var x) expr | (x == varName) = return $ Just expr
+unifySingleVar varName expr (Var x) | (x == varName) = return $ Just expr
+unifySingleVar _ (Var _) (Var _) = return Nothing
+
+unifySingleVar varName (Fun x e) (Fun x' e') = do
+    if x == x' then return () else Left $ UnificationFailure (Fun x e) (Fun x' e')
+    unifySingleVar varName e e'
+
+unifySingleVar varName (App e1 e2) (App e1' e2') = do
+    arg <- unifySingleVar varName e1 e1'
     case arg of
-        Just arg -> return arg
-        Nothing -> Left $ UnconstraintedImplicitArg argTy expectedTy
+        Just arg -> return (Just arg)
+        Nothing -> unifySingleVar varName e2 e2'
 
-    where
-        unifySingleVar :: String -> Expr -> Expr -> Result (Maybe Expr)
-        unifySingleVar varName (Var x) expr | (x == varName) = return $ Just expr
-        unifySingleVar varName expr (Var x) | (x == varName) = return $ Just expr
-        unifySingleVar _ (Var x) (Var x') =
-            if x == x' then return Nothing else Left $ UnificationFailure (Var x) (Var x')
+unifySingleVar varName e@(Pi x _ a b) e'@(Pi x' _ a' b') = do
+    if x == x' then return () else Left $ UnificationFailure e e'
+    arg <- unifySingleVar varName a a'
+    case arg of
+        Just arg -> return (Just arg)
+        Nothing -> unifySingleVar varName b b'
+
+unifySingleVar _ Type Type = return Nothing
+unifySingleVar varName e@(Ind tyName args) e'@(Ind tyName' args') = do
+    if tyName == tyName' then return () else Left $ UnificationFailure e e'
+    unifyIndArgs varName e e' args args'
+
+unifySingleVar _ e e' = Left $ UnificationFailure e e'
         
-        unifySingleVar varName (Fun x e) (Fun x' e') = do
-            if x == x' then return () else Left $ UnificationFailure (Fun x e) (Fun x' e')
-            unifySingleVar varName e e'
+unifyIndArgs :: String -> Expr -> Expr -> [Expr] -> [Expr] -> Result (Maybe Expr)
+unifyIndArgs _ _ _ [] [] = return Nothing
+unifyIndArgs _ e e' [] _ = Left $ UnificationFailure e e'
+unifyIndArgs _ e e' _ [] = Left $ UnificationFailure e e'
 
-        unifySingleVar varName (App e1 e2) (App e1' e2') = do
-            arg <- unifySingleVar varName e1 e1'
-            case arg of
-                Just arg -> return (Just arg)
-                Nothing -> unifySingleVar varName e2 e2'
-
-        unifySingleVar varName e@(Pi x _ a b) e'@(Pi x' _ a' b') = do
-            if x == x' then return () else Left $ UnificationFailure e e'
-            arg <- unifySingleVar varName a a'
-            case arg of
-                Just arg -> return (Just arg)
-                Nothing -> unifySingleVar varName b b'
-        
-        unifySingleVar _ Type Type = return Nothing
-        unifySingleVar varName e@(Ind tyName args) e'@(Ind tyName' args') = do
-            if tyName == tyName' then return () else Left $ UnificationFailure e e'
-            unifyIndArgs varName e e' args args'
-
-        unifySingleVar _ e e' = Left $ UnificationFailure e e'
-        
-        unifyIndArgs :: String -> Expr -> Expr -> [Expr] -> [Expr] -> Result (Maybe Expr)
-        unifyIndArgs _ _ _ [] [] = return Nothing
-        unifyIndArgs _ e e' [] _ = Left $ UnificationFailure e e'
-        unifyIndArgs _ e e' _ [] = Left $ UnificationFailure e e'
-
-        unifyIndArgs varName e e' (a : rest) (a' : rest') = do
-            arg <- unifySingleVar varName a a'
-            case arg of
-                Just arg -> return (Just arg)
-                Nothing -> unifyIndArgs varName e e' rest rest'
+unifyIndArgs varName e e' (a : rest) (a' : rest') = do
+    arg <- unifySingleVar varName a a'
+    case arg of
+        Just arg -> return (Just arg)
+        Nothing -> unifyIndArgs varName e e' rest rest'
 
 
 buildWithTactics :: Int -> State -> [TacticStmt] -> Value -> Result (Expr, [TacticStmt])

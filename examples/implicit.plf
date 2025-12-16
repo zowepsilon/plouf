@@ -1,8 +1,21 @@
+inductive or: Type -> Type -> Type
+  Left:  {A: Type} -> {B: Type} -> A -> or A B
+  Right: {A: Type} -> {B: Type} -> B -> or A B
+
+inductive S: Type
+  s: S
+
+inductive T: Type
+  t: T
+
 id: {A: Type} -> A -> A :=
-    fun A x -> x
-
-
-axiom T: Type
-axiom t: T
+  fun A x -> x
 
 hello: T := id t
+
+either: or S T := Left s
+
+inductive eq: (A: Type) -> A -> A -> Type
+  refl: {A: Type} -> {x: Type} -> eq A x x
+
+obviously: eq S s s := refl
