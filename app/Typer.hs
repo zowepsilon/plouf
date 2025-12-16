@@ -158,7 +158,7 @@ inferExpr _ state e@(Ind _ _) = Left $ Unreachable state ("tried to inferExpr " 
 
 checkExpr :: Int -> State -> Expr -> Value -> Result Expr
 
-checkExpr _ state expr ty | traceShow ("checkExpr", expr, ty) False = undefined
+-- checkExpr _ state expr ty | traceShow ("checkExpr", expr, ty) False = undefined
 checkExpr k state (Fun x e) (VPi _ _ a b) = do
     let y = VNeutral (NVar (fresh k))
     b <- (b y)
@@ -291,7 +291,7 @@ buildWithTactics k state (TacUse funExpr : tacRest) ty = do
 buildWithTactics k state (TacInduction : tacRest) ty = do
     tyExpr <- readback k ty
     case tyExpr of
-        (Pi x (Var tyName) b) ->
+        (Pi x _ (Var tyName) b) ->
             let indTac = TacUse $ App (Var $ tyName ++ ".ind") (Fun x b) in
             buildWithTactics k state (indTac : tacRest) ty
         _ -> Left $ CannotUseInductionTactic state ty
