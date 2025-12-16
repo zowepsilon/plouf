@@ -3,7 +3,7 @@ inductive Bool: Type
   ff: Bool
 
 inductive or: (A: Type) -> (B: Type) -> Type
-  left:  {A: Type} -> {B: Type} -> A -> or A B
+  left:  (A: Type) -> (B: Type) -> A -> or A B
   right: (A: Type) -> (B: Type) -> B -> or A B
 
 inductive eq: (A: Type) -> A -> A -> Type

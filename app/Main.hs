@@ -6,7 +6,7 @@ import System.IO
 import GHC.Utils.Misc
 
 import Parser
-import Typer
+import Kernel
 
 fileRun :: String -> IO ()
 fileRun fileName = do

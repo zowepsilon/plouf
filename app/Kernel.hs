@@ -1,4 +1,4 @@
-module Typer(Result, Error, State, emptyState, runStatement, runProgram) where
+module Kernel(Result, Error, State, emptyState, runStatement, runProgram) where
 
 import Data.List
 import GHC.Data.List.SetOps
@@ -211,12 +211,14 @@ checkExpr k state (App f x) expectedTy = do
 
 checkExpr k state e t = checkByInferExpr k state e t
 
+checkByInferExpr :: Int -> State -> Expr -> Value -> Result Expr
 checkByInferExpr k state e t = do
     t' <- inferExpr k state e
     if (veq k t t')
         then return e
         else Left $ MismatchedTypes state t t'
 
+reconstructApps :: Expr -> [Expr] -> Expr
 reconstructApps fun [] = fun
 reconstructApps fun (arg : rest) = reconstructApps (App fun arg) rest
 
@@ -231,9 +233,10 @@ argTypes (Pi x True a b) =
     let (iArgs, eArgTypes) = argTypes b in
     ((x, a) : iArgs, eArgTypes)
 argTypes ty = ([], explicitArgTypesTail ty)
-
-explicitArgTypesTail (Pi x _ a b) = a : explicitArgTypesTail b
-explicitArgTypesTail ty = [ty]
+    where
+        explicitArgTypesTail :: Expr -> [Expr]
+        explicitArgTypesTail (Pi _ _ a b) = a : explicitArgTypesTail b
+        explicitArgTypesTail ty = [ty]
 
 inferImplicitArg :: Expr -> [(String, Expr)] -> [Result Expr] -> [Expr] -> Result Expr
 inferImplicitArg funExpr [] _ _ = return funExpr
@@ -245,7 +248,8 @@ inferImplicitArg funExpr ((varName, varTy) : iArgsRest) concreteTypes sigTypes =
             inferImplicitArg (App funExpr arg) iArgsRest concreteTypes sigTypes
 
 tryUnify :: String -> [Result Expr] -> [Expr] -> Result (Maybe Expr)
-tryUnify varName [] [] = return Nothing
+tryUnify _ [] _ = return Nothing
+tryUnify _ _ [] = return Nothing
 tryUnify varName (Right ccTy : concreteTypesRest) (sgTy : sigTypesRest) = do
     maybeArg <- unifySingleVar varName ccTy sgTy
     case maybeArg of
