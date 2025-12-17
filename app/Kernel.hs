@@ -1,4 +1,4 @@
-module Kernel(Result, Error, State, emptyState, runStatement, runProgram) where
+module Kernel(M, Error, State, emptyState, runStatement, runProgram) where
 
 import Data.List
 import GHC.Data.List.SetOps
@@ -6,7 +6,7 @@ import Debug.Trace
 
 import Ast
 
-evalExpr :: State -> Expr -> Result Value
+evalExpr :: State -> Expr -> M Value
 evalExpr state (Var x)     =
     case assocMaybe (env state) x of
         Just val -> return val
@@ -23,10 +23,11 @@ evalExpr state (Pi x implicit t e)  = do
     t <- evalExpr state t
     return $ VPi (Just x) implicit t (\v -> evalExpr (addToEnv state x v) e)
 
+evalExpr state (NoInfer e) = evalExpr state e
 evalExpr state e@(Ind _ _) = Left $ Unreachable state ("tried to evalExpr " ++ show e)
 evalExpr state e@(By _)    = Left $ Unreachable state ("tried to evalExpr " ++ show e)
 
-evalAppVal :: State -> Value -> Value -> Result Value
+evalAppVal :: State -> Value -> Value -> M Value
 evalAppVal state f x =
     case f of
         (VFun _ f) -> f x
@@ -63,7 +64,7 @@ evalAppVal state f x =
                     return (consName, arg : headArgs)
                 normalizedArg (NIndApp _ _ _) = Nothing
 
-                evalConsArgs :: [(Value, Bool)] -> Result [Value]
+                evalConsArgs :: [(Value, Bool)] -> M [Value]
                 evalConsArgs [] = return []
                 evalConsArgs ((arg, False) : rest) = do
                     rest <- evalConsArgs rest
@@ -73,7 +74,7 @@ evalAppVal state f x =
                     rest <- evalConsArgs rest
                     return (arg : prev : rest)
 
-                evalBranch :: Value -> [Value] -> Result Value
+                evalBranch :: Value -> [Value] -> M Value
                 evalBranch val [] = return val
                 evalBranch val (arg : rest) = do
                     val <- evalAppVal state val arg
@@ -81,7 +82,7 @@ evalAppVal state f x =
 
         _ -> Left $ AppOnNonFun state f x
 
-neutral :: Int -> Neutral -> Result Expr
+neutral :: Int -> Neutral -> M Expr
 neutral _ (NVar x)   = return $ Var x
 neutral k (NApp f x) = do
     f <- neutral k f
@@ -92,19 +93,19 @@ neutral k (NIndApp tyName branches x) = do
     x <- neutral k x
     return $ App (Ind tyName branches) x
 
-readback :: Int -> Value -> Result Expr
+readback :: Int -> Value -> M Expr
 readback k (VFun _ f) = do
     let x = fresh k
     f <- f $ VNeutral $ NVar x
     f <- readback (k+1) f
     return (Fun x f)
 
-readback k (VPi _ _ a b) = do
+readback k (VPi _ implicit a b) = do
     let x = fresh k
     b <- b (VNeutral $ NVar x)
     b <- readback (k+1) b
     a <- readback k a
-    return (Pi x False a b)
+    return (Pi x implicit a b)
 
 readback _ VType = return Type
 
@@ -120,7 +121,7 @@ veq k x y =
         (Right e, Right e') -> e == e'
         _ -> False
 
-inferExpr :: Int -> State -> Expr -> Result Value
+inferExpr :: Int -> State -> Expr -> M Value
 inferExpr _ state (Var x) =
     case assocMaybe (tenv state) x of
         Just ty -> return ty
@@ -151,16 +152,17 @@ inferExpr k state (Pi x _ a b) = do
     return VType
 
 inferExpr _ _ Type = return VType
+inferExpr k state (NoInfer e) = inferExpr k state e
 inferExpr _ state f@(Fun _ _) = Left $ CannotInferTypeOfFun state f
 inferExpr _ state f@(By  _  ) = Left $ CannotInferTypeOfBy  state f
 inferExpr _ state e@(Ind _ _) = Left $ Unreachable state ("tried to inferExpr " ++ show e)
 
 
-checkExpr :: Int -> State -> Expr -> Value -> Result Expr
+checkExpr :: Int -> State -> Expr -> Value -> M Expr
 
 -- checkExpr _ state expr ty | traceShow ("checkExpr", expr, ty) False = undefined
 checkExpr k state (Fun x e) (VPi _ _ a b) = do
-    let y = VNeutral (NVar (fresh k))
+    let y = VNeutral (NVar x)
     b <- (b y)
     let state' = addToTEnv state x a
     let state'' = addToEnv state' x y
@@ -181,11 +183,12 @@ checkExpr k state (Var x) expectedTy = do
     case assocMaybe (tenv state) x of
         Nothing -> Left $ UnknownVariableTyping state x
         Just funTy@(VPi _ True _ _) -> do
-            funTy <- readbackShow k funTy
-            expectedTyExpr <- readbackShow k expectedTy
+            funTy <- readback k funTy
+            expectedTyExpr <- readback k expectedTy
             let concreteTypes = [Right expectedTyExpr]
             let (iArgs, sigTypes) = argTypes funTy
-            inferredFunExpr <- inferImplicitArg (Var x) iArgs concreteTypes sigTypes
+            (inferredFunExpr, iArgExprs) <- inferImplicitArg (NoInfer $ Var x) iArgs concreteTypes sigTypes
+            state <- addIArgsToState state (zip iArgs iArgExprs)
             checkByInferExpr k state inferredFunExpr expectedTy
 
         Just ty -> checkByInferExpr k state (Var x) ty
@@ -193,25 +196,27 @@ checkExpr k state (Var x) expectedTy = do
 checkExpr k state (App f x) expectedTy = do
     let (funExpr, revArgs) = unfoldCall f x
     let args = reverse revArgs
-    case inferExpr k state funExpr of
-        Right (VPi _ False _ _) -> checkByInferExpr k state (App f x) expectedTy
-        Right funTy@(VPi _ True _ _) -> do
-            funTy <- readbackShow k funTy
-            expectedTyExpr <- readbackShow k expectedTy
-            let concreteTypes = (map (\arg -> inferExpr k state arg >>= readbackShow k) args) ++ [Right expectedTyExpr]
-            let (iArgs, sigTypes) = argTypes funTy
-            inferredFunExpr <- inferImplicitArg funExpr iArgs concreteTypes sigTypes
-            let inferredAppExpr = reconstructApps inferredFunExpr args
-            checkByInferExpr k state inferredAppExpr expectedTy
-            
-        Right ty -> Left $ CannotTypeAppWithoutPi state (App f x) ty
-        Left err -> Left err
+    case funExpr of
+        NoInfer _ -> checkByInferExpr k state (App f x) expectedTy
+        _ -> case inferExpr k state funExpr of
+            Right (VPi _ False _ _) -> checkByInferExpr k state (App f x) expectedTy
+            Right funTy@(VPi _ True _ _) -> do
+                funTy <- readback k funTy
+                expectedTyExpr <- readback k expectedTy
+                let concreteTypes = (map (\arg -> inferExpr k state arg >>= readback k) args) ++ [Right expectedTyExpr]
+                let (iArgs, sigTypes) = argTypes funTy
+                (inferredFunExpr, iArgExprs) <- inferImplicitArg (NoInfer funExpr) iArgs concreteTypes sigTypes
+                state <- addIArgsToState state (zip iArgs iArgExprs)
+                let inferredAppExpr = reconstructApps inferredFunExpr args
+                checkByInferExpr k state inferredAppExpr expectedTy
+                
+            Right ty -> Left $ CannotTypeAppWithoutPi state (App f x) ty
+            Left err -> Left err
         
-
 
 checkExpr k state e t = checkByInferExpr k state e t
 
-checkByInferExpr :: Int -> State -> Expr -> Value -> Result Expr
+checkByInferExpr :: Int -> State -> Expr -> Value -> M Expr
 checkByInferExpr k state e t = do
     t' <- inferExpr k state e
     if (veq k t t')
@@ -238,16 +243,17 @@ argTypes ty = ([], explicitArgTypesTail ty)
         explicitArgTypesTail (Pi _ _ a b) = a : explicitArgTypesTail b
         explicitArgTypesTail ty = [ty]
 
-inferImplicitArg :: Expr -> [(String, Expr)] -> [Result Expr] -> [Expr] -> Result Expr
-inferImplicitArg funExpr [] _ _ = return funExpr
+inferImplicitArg :: Expr -> [(String, Expr)] -> [M Expr] -> [Expr] -> M (Expr, [Expr])
+inferImplicitArg funExpr [] _ _ = return (funExpr, [])
 inferImplicitArg funExpr ((varName, varTy) : iArgsRest) concreteTypes sigTypes = do
     implicitArg <- tryUnify varName concreteTypes sigTypes
     case implicitArg of
         Nothing -> Left $ UnconstraintedImplicitArg varName varTy concreteTypes sigTypes
         Just arg -> do
-            inferImplicitArg (App funExpr arg) iArgsRest concreteTypes sigTypes
+            (expr, argTail) <- inferImplicitArg (App funExpr arg) iArgsRest concreteTypes sigTypes
+            return (expr, arg : argTail)
 
-tryUnify :: String -> [Result Expr] -> [Expr] -> Result (Maybe Expr)
+tryUnify :: String -> [M Expr] -> [Expr] -> M (Maybe Expr)
 tryUnify _ [] _ = return Nothing
 tryUnify _ _ [] = return Nothing
 tryUnify varName (Right ccTy : concreteTypesRest) (sgTy : sigTypesRest) = do
@@ -260,10 +266,12 @@ tryUnify varName (Left _ : concreteTypesRest) (_ : sigTypesRest) =
     tryUnify varName concreteTypesRest sigTypesRest
 
 
-unifySingleVar :: String -> Expr -> Expr -> Result (Maybe Expr)
+unifySingleVar :: String -> Expr -> Expr -> M (Maybe Expr)
+-- unifySingleVar varName t1 t2 | traceShow ("unifySingleVar", varName, t1, t2) False = undefined
 unifySingleVar varName (Var x) expr | (x == varName) = return $ Just expr
 unifySingleVar varName expr (Var x) | (x == varName) = return $ Just expr
-unifySingleVar _ (Var _) (Var _) = return Nothing
+unifySingleVar _ (Var _) _ = return Nothing
+unifySingleVar _ _ (Var _) = return Nothing
 
 unifySingleVar varName (Fun x e) (Fun x' e') = do
     if x == x' then return () else Left $ UnificationFailure (Fun x e) (Fun x' e')
@@ -289,7 +297,7 @@ unifySingleVar varName e@(Ind tyName args) e'@(Ind tyName' args') = do
 
 unifySingleVar _ e e' = Left $ UnificationFailure e e'
         
-unifyIndArgs :: String -> Expr -> Expr -> [Expr] -> [Expr] -> Result (Maybe Expr)
+unifyIndArgs :: String -> Expr -> Expr -> [Expr] -> [Expr] -> M (Maybe Expr)
 unifyIndArgs _ _ _ [] [] = return Nothing
 unifyIndArgs _ e e' [] _ = Left $ UnificationFailure e e'
 unifyIndArgs _ e e' _ [] = Left $ UnificationFailure e e'
@@ -300,15 +308,22 @@ unifyIndArgs varName e e' (a : rest) (a' : rest') = do
         Just arg -> return (Just arg)
         Nothing -> unifyIndArgs varName e e' rest rest'
 
+addIArgsToState :: State -> [((String, Expr), Expr)] -> M State
+addIArgsToState state [] = return state
+addIArgsToState state (((argName, argTy), argExpr) : rest) = do
+    argTyVal <- evalExpr state argTy
+    argVal <- evalExpr state argExpr
+    let state' = addToEnv (addToTEnv state argName argTyVal) argName argVal
+    addIArgsToState state' rest
 
-buildWithTactics :: Int -> State -> [TacticStmt] -> Value -> Result (Expr, [TacticStmt])
+buildWithTactics :: Int -> State -> [TacticStmt] -> Value -> M (Expr, [TacticStmt])
 
 -- buildWithTactics _ _ stmts ty | trace ("buildWithTactics (" ++ show stmts ++ ", " ++ show ty ++ ")") False = undefined
 buildWithTactics k state (TacIntro names : tacRest) ty = do
     -- TODO: invalid empty intro
     buildFun state names ty tacRest
     where
-        buildFun :: State -> [String] -> Value -> [TacticStmt] -> Result (Expr, [TacticStmt])
+        buildFun :: State -> [String] -> Value -> [TacticStmt] -> M (Expr, [TacticStmt])
         buildFun state [] ty tacRest = buildWithTactics k state tacRest ty
         buildFun state (name : nRest) (VPi _ _ a b) tacRest = do
             let var = VNeutral (NVar name)
@@ -323,18 +338,54 @@ buildWithTactics k state (TacUse funExpr : tacRest) ty = do
     fty <- inferExpr k state funExpr
     buildApp funExpr fty tacRest
     where
-        buildApp :: Expr -> Value -> [TacticStmt] -> Result (Expr, [TacticStmt])
-        buildApp expr fty tacRest | veq k fty ty = do
-                expr <- checkExpr k state expr ty
-                return (expr, tacRest)
+        buildApp :: Expr -> Value -> [TacticStmt] -> M (Expr, [TacticStmt])
+        -- buildApp expr ty tacRest | traceShow ("buildApp", expr, ty, tacRest) False = undefined
 
-        buildApp funExpr (VPi _ _ a b) tacRest = do
+        buildApp expr funTy tacRest | veq k funTy ty = do
+            expr <- checkExpr k state expr ty
+            return (expr, tacRest)
+
+        buildApp funExpr funTy@(VPi _ True _ _) tacRest = do
+            funTy <- readback k funTy
+            expectedTyExpr <- readback k ty
+            let concreteTypes = [Right expectedTyExpr]
+            let (iArgs, eArgs, sigTypes) = retType funTy
+            (inferredFunExpr, iArgExprs) <- inferImplicitArg (NoInfer funExpr) iArgs concreteTypes sigTypes
+            state <- addIArgsToState state (zip iArgs iArgExprs)
+            (eArgs, tacRest) <- explicitArgHoles state eArgs tacRest
+            return (reconstructApps inferredFunExpr eArgs, tacRest)
+            
+        buildApp funExpr (VPi _ False a b) tacRest = do
             (arg, tacRest) <- buildWithTactics k state tacRest a
             argVal <- evalExpr state arg
             b <- b argVal
             buildApp (App funExpr arg) b tacRest
 
         buildApp _ fty _ = Left $ MismatchedTypesInUseTactic state ty fty
+    
+        explicitArgHoles :: State -> [Expr] -> [TacticStmt] -> M ([Expr], [TacticStmt])
+        explicitArgHoles _ [] tacRest = return ([], tacRest)
+        explicitArgHoles state (ty : rest) tacRest = do
+            ty <- evalExpr state ty
+            (arg, tacRest) <- buildWithTactics k state tacRest ty
+            (argsTail, tacRest) <- explicitArgHoles state rest tacRest
+            return (arg : argsTail, tacRest)
+
+
+        retType :: Expr -> ([(String, Expr)], [Expr], [Expr])
+        retType (Pi x True a b) =
+            let (iArgs, eArgTypes, ret) = retType b in
+            ((x, a) : iArgs, eArgTypes, ret)
+        retType ty = 
+            let (eargs, ret) = retTypeTail ty in
+            ([], eargs, ret)
+
+        retTypeTail :: Expr -> ([Expr], [Expr])
+        retTypeTail (Pi _ _ a b) =
+            let (eargs, ret) = retTypeTail b in
+            (a : eargs, ret)
+        retTypeTail ty = ([], [ty])
+
 
 buildWithTactics k state (TacInduction : tacRest) ty = do
     tyExpr <- readback k ty
@@ -346,7 +397,16 @@ buildWithTactics k state (TacInduction : tacRest) ty = do
 
 buildWithTactics _ state [] ty = Left $ UnfilledHole state ty
 
-runStatement :: State -> Stmt -> Result (State, String)
+
+evalArgList :: State -> [(String, Expr)] -> M ([(String, Value)], State)
+evalArgList state [] = return ([], state)
+evalArgList state ((argName, argTy) : rest) = do
+    argTy <- evalExpr state argTy
+    let state' = addOpaque state argName argTy
+    (rest, state'') <- evalArgList state' rest
+    return ((argName, argTy) : rest, state'')
+
+runStatement :: State -> Stmt -> M (State, String)
 runStatement state (Axiom name ty) = do
     ty <- checkExpr 0 state ty VType
     ty <- evalExpr state ty
@@ -395,14 +455,14 @@ runStatement state (IndDecl tyName kind constructors) = do
     return (state5, msg)
 
     where
-        getKindArgs :: Expr -> Result [(String, Expr)]
+        getKindArgs :: Expr -> M [(String, Expr)]
         getKindArgs (Pi a _ t b) = do
             args <- getKindArgs b
             return $ (a, t) : args
         getKindArgs Type = return []
         getKindArgs kind = Left (NonTypeInductiveKind state kind)
 
-        evalCons :: State -> (String, Expr) -> Result ((String, ConstructorSig), (String, Expr))
+        evalCons :: State -> (String, Expr) -> M ((String, ConstructorSig), (String, Expr))
         evalCons state (consName, consTy) = do
             consTy <- checkExpr 0 state consTy VType
             consTyVal <- evalExpr state consTy
@@ -412,7 +472,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             consTyArgs <- mapM (evalExpr state) consTyArgs
             return ((consName, ConsPoint consArgs [] consTyArgs), (consName, consTy))
         
-        linearize :: Expr -> Result ([(String, Expr)], [Expr])
+        linearize :: Expr -> M ([(String, Expr)], [Expr])
         linearize (Pi a _ t b) = do -- TODO: implicit
             (args, tail) <- linearize b
             return ((a, t) : args, tail)
@@ -420,20 +480,13 @@ runStatement state (IndDecl tyName kind constructors) = do
             tail <- linearizeTail tyName consTy
             return $ ([], tail)
 
-        linearizeTail :: String -> Expr -> Result [Expr]
+        linearizeTail :: String -> Expr -> M [Expr]
         linearizeTail tyName (Var x) | x == tyName = return []
         linearizeTail tyName (App f arg) = do
             tail <- linearizeTail tyName f 
             return (arg : tail)
         linearizeTail _ ret = Left $ InvalidConstructorType state ret
 
-        evalArgList :: State -> [(String, Expr)] -> Result ([(String, Value)], State)
-        evalArgList state [] = return ([], state)
-        evalArgList state ((argName, argTy) : rest) = do
-            argTy <- evalExpr state argTy
-            let state' = addOpaque state argName argTy
-            (rest, state'') <- evalArgList state' rest
-            return ((argName, argTy) : rest, state'')
 
         predicateType :: Int -> String -> [String] -> [(String, Expr)]  -> (Expr, Int)
         predicateType k tyName kindArgNames [] =
@@ -459,7 +512,7 @@ runStatement state (IndDecl tyName kind constructors) = do
     
         consInductionArgType ::
             Int -> String -> String -> ConstructorSig 
-                -> [String] -> [(String, Expr)] -> Result (Expr, Int, [Bool])
+                -> [String] -> [(String, Expr)] -> M (Expr, Int, [Bool])
 
         consInductionArgType k predicateName consName consSig argNames [] = do
             let consNameVar = Var consName
@@ -477,7 +530,7 @@ runStatement state (IndDecl tyName kind constructors) = do
                 _ -> consInductionArgTypeIsNotInd
 
             where
-                consInductionArgTypeIsInd :: [Expr] -> Result (Expr, Int, [Bool])
+                consInductionArgTypeIsInd :: [Expr] -> M (Expr, Int, [Bool])
                 consInductionArgTypeIsInd argTypeArgs = do
                     let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k)
                     (tail, k'', isRecTail) <- consInductionArgType k' predicateName consName consSig (var : argNames) rest
@@ -487,7 +540,7 @@ runStatement state (IndDecl tyName kind constructors) = do
                     let tail' = Pi "_" False predicateInstance tail
                     return (Pi var False argType tail', k'', True : isRecTail)
 
-                consInductionArgTypeIsNotInd :: Result (Expr, Int, [Bool])
+                consInductionArgTypeIsNotInd :: M (Expr, Int, [Bool])
                 consInductionArgTypeIsNotInd = do
                     let (var, k') = if argName == "_" then (fresh k, k+1) else (argName, k)
                     (tail, k'', isRecTail) <- consInductionArgType k' predicateName consName consSig (var : argNames) rest
@@ -501,7 +554,7 @@ runStatement state (IndDecl tyName kind constructors) = do
                     return $ arg : firstArgs
                 consInductionArgTypeArgs _ _ = Nothing
 
-        inductionType :: String -> [(String, Expr)] -> [(String, ConstructorSig)] -> Result (Expr, [(String, ConstructorSig)])
+        inductionType :: String -> [(String, Expr)] -> [(String, ConstructorSig)] -> M (Expr, [(String, ConstructorSig)])
         inductionType tyName kindArgs consSigs = do
             let (pTy, _) = predicateType 0 tyName [] kindArgs
             (tail, _, isRecArgsList) <- inductionTypeCases 0 consSigs
@@ -509,7 +562,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             return (Pi "P" False pTy tail, consSigs')
 
             where
-                inductionTypeCases :: Int -> [(String, ConstructorSig)] -> Result (Expr, Int, [[Bool]])
+                inductionTypeCases :: Int -> [(String, ConstructorSig)] -> M (Expr, Int, [[Bool]])
                 inductionTypeCases k [] =
                     return (inductionTypeTail k [] kindArgs)
 
@@ -539,7 +592,7 @@ runStatement state (IndDecl tyName kind constructors) = do
             VFun Nothing (funVal arity [])
             where
                 -- HOAS go brrrrrrr
-                funVal :: Int -> [Value] -> Value -> Result Value
+                funVal :: Int -> [Value] -> Value -> M Value
                 funVal 1 args x = return $ VInd tyName $ reverse (x : args)
                 funVal n args x = return $ VFun Nothing $ funVal (n-1) (x : args)
 
@@ -553,7 +606,7 @@ runStatement state (Declaration name (Just ty) val) = do
     val <- checkExpr 0 state val ty
     runDecl state name ty val
 
-runDecl :: State -> String -> Value -> Expr -> Result (State, String)
+runDecl :: State -> String -> Value -> Expr -> M (State, String)
 runDecl state name ty val = do
     val <- evalExpr state val
     let state' = addToTEnv state name ty
@@ -561,7 +614,7 @@ runDecl state name ty val = do
     let msg = name ++ ": " ++ show ty
     return (state'', msg)
 
-runProgram :: State -> [Stmt] -> IO (Result State)
+runProgram :: State -> [Stmt] -> IO (M State)
 runProgram state [] = return (return state)
 runProgram state (stmt : rest) =
     case runStatement state stmt of

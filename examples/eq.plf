@@ -1,8 +1,7 @@
-axiom A: Type
-
-inductive Eq: (x: A) -> (y: A) -> Type
-    refl: (x: A) -> Eq x x
+inductive Eq: (A: Type) -> (x: A) -> (y: A) -> Type
+  refl: {A: Type} -> {x: A} -> Eq A x x
 
 eq_refl := refl
-eq_sym: (x: A) -> (y: A) -> (Eq x y) -> (Eq y x)
-    := Eq.ind (fun x y _ -> Eq y x) refl
+
+eq_sym: (A: Type) -> (x: A) -> (y: A) -> (Eq A x y) -> (Eq A y x) := by 
+  Eq.ind (fun A x y _ -> Eq A y x) (fun B y -> refl)

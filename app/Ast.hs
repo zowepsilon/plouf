@@ -11,6 +11,7 @@ data Expr =
   | Type
   | Ind String [Expr] -- constructed only through readback for type checking
   | By [TacticStmt]
+  | NoInfer Expr
   deriving Eq
 
 data TacticStmt =
@@ -27,8 +28,8 @@ data Stmt =
   deriving Show
 
 data Value =
-    VFun (Maybe String) (Value -> Result Value)
-  | VPi (Maybe String) Bool Value (Value -> Result Value)
+    VFun (Maybe String) (Value -> M Value)
+  | VPi (Maybe String) Bool Value (Value -> M Value)
   | VType
   --     induction type name
   --            branches
@@ -74,11 +75,11 @@ data Error
     | IntroTacticOnNonPi State TacticStmt String Value
     | MismatchedTypesInUseTactic State Value Value
     | UnificationFailure Expr Expr
-    | UnconstraintedImplicitArg String Expr [Result Expr] [Expr]
+    | UnconstraintedImplicitArg String Expr [M Expr] [Expr]
     | CannotUseInductionTactic State Value
     deriving Show
 
-type Result a = Either Error a
+type M a = Either Error a
 
 instance Show Expr where
     show (Var x) = x
@@ -120,8 +121,8 @@ instance Show Value where
         Left err -> "{error in readbackShow: " ++ show err ++ "}"
 
 
-readbackShow :: Int -> Value -> Result Expr
-neutralShow :: Int -> Neutral -> Result Expr 
+readbackShow :: Int -> Value -> M Expr
+neutralShow :: Int -> Neutral -> M Expr 
 
 neutralShow _ (NVar x)   = return $ Var x
 neutralShow k (NApp f x) = do

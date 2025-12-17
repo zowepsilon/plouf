@@ -3,20 +3,17 @@ inductive Bool: Type
   ff: Bool
 
 inductive or: (A: Type) -> (B: Type) -> Type
-  left:  (A: Type) -> (B: Type) -> A -> or A B
-  right: (A: Type) -> (B: Type) -> B -> or A B
+  left:  {A: Type} -> {B: Type} -> A -> or A B
+  right: {A: Type} -> {B: Type} -> B -> or A B
 
 inductive eq: (A: Type) -> A -> A -> Type
-  refl: (A: Type) -> (x: A) -> eq A x x
+  refl: {A: Type} -> {x: A} -> eq A x x
 
 
-is_tt: Bool -> Type := fun b -> (eq Bool b tt)
-is_ff: Bool -> Type := fun b -> (eq Bool b ff)
-
-bool_is_two: (b: Bool) -> or (is_tt b) (is_ff b) := by
+bool_is_two: (b: Bool) -> or (eq Bool b tt) (eq Bool b ff) := by
   induction
-  - left (is_tt tt) (is_ff tt); refl Bool tt
-  - right (is_tt ff) (is_ff ff); refl Bool ff
+  - left; refl
+  - right; refl
 
 
 print bool_is_two
