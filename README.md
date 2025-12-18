@@ -52,3 +52,12 @@ bool_is_two: (b: Bool) -> or (is_tt b) (is_ff b) := by
   - left (is_tt tt) (is_ff tt); refl Bool tt
   - right (is_tt ff) (is_ff ff); refl Bool ff
 ```
+
+
+### Project structure
+
+- `app/Main.hs`: entry point, REPL
+- `app/Ast.hs`: shared data structures and some utils
+- `app/Parser.hs`: the lexer/parser
+- `app/Typer.hs`: dependent type checker, evaluator, and tactic language
+- `examples/`: example programs
