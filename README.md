@@ -47,6 +47,7 @@ is_tt: Bool -> Type := fun b -> (eq Bool b tt)
 is_ff: Bool -> Type := fun b -> (eq Bool b ff)
 
 // tactic language
+// let's prove that a Bool is either `tt` or `ff`
 bool_is_two: (b: Bool) -> or (is_tt b) (is_ff b) := by
   induction
   - left (is_tt tt) (is_ff tt); refl Bool tt
