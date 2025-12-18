@@ -2,19 +2,7 @@ inductive nat: Type
     Z: nat
     S: nat -> nat
 
-add: nat -> nat -> nat :=
-    nat.ind (fun _ -> (nat -> nat))
-        (fun n -> n)
-        (fun m prev n -> S (prev n))
 
-mul: nat -> nat -> nat :=
-    nat.ind (fun _ -> (nat -> nat))
-    (fun n -> Z)
-    (fun m prev n -> add (prev n) n)
-
-inductive isEven: nat -> Type
-    isEvenZ: isEven Z
-    isEvenSS: (n: nat) -> isEven n -> isEven (S (S n))
 
 print isEvenZ
 
@@ -25,8 +13,3 @@ cowards :=
 
     
 
-two := S (S Z)
-three := S (S (S Z))
-
-print (add two three)
-print (mul two three)

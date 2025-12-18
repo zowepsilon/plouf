@@ -2,18 +2,78 @@ inductive Bool: Type
   tt: Bool
   ff: Bool
 
+pause
+
+id: {A: Type} -> A -> A :=
+  fun A x -> x
+
+truc: Bool := (id tt)
+
+pause
+
+print truc
+pause
+
 inductive or: (A: Type) -> (B: Type) -> Type
   left:  {A: Type} -> {B: Type} -> A -> or A B
   right: {A: Type} -> {B: Type} -> B -> or A B
 
+pause
+
 inductive eq: (A: Type) -> A -> A -> Type
   refl: {A: Type} -> {x: A} -> eq A x x
 
+pause
 
 bool_is_two: (b: Bool) -> or (eq Bool b tt) (eq Bool b ff) := by
   induction
-  - left; refl
-  - right; refl
+  - left
+    refl
+  - right
+    refl
 
+pause
 
-print bool_is_two
+inductive nat: Type
+  Z: nat
+  S: nat -> nat
+
+pause
+
+print Z
+print S
+pause
+
+print nat.ind
+pause
+
+// add 0     n = n
+// add (S m) n = S (add m n)
+add: nat -> nat -> nat :=
+  nat.ind (fun _ -> (nat -> nat))
+    (fun n -> n)
+    (fun m prev n -> S (prev n))
+
+// mul 0     n = 0
+// mul (S m) n = (mul m n) + n
+mul: nat -> nat -> nat :=
+  nat.ind (fun _ -> (nat -> nat))
+  (fun n -> Z)
+  (fun m prev n -> add (prev n) n)
+
+pause
+
+two := S (S Z)
+three := S (S (S Z))
+
+print (add two three)
+print (mul two three)
+
+pause 
+
+inductive isEven: nat -> Type
+  isEvenZ: isEven Z
+  isEvenSS: (n: nat) -> isEven n -> isEven (S (S n))
+
+pause
+isEvenTwo: isEven (S (S Z)) := isEvenSS Z isEvenZ

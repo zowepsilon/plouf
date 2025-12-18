@@ -24,17 +24,20 @@ interactiveRun state = do
     putStr "plouf > "
     hFlush stdout
     firstLine <- getLine
-    fragment <- prompt (reverse $ removeSpaces firstLine)
-    case parseProgram fragment of
-        Nothing -> putStrLn "parsing error"
-        Just stmts -> do
-            result <- runProgram state stmts
-            case result of
-                Left err -> do
-                    putStrLn $ "typing error: " ++ show err
-                    interactiveRun state
-                Right state' ->
-                    interactiveRun state'
+    case firstLine of
+        "exit" -> putStrLn "Exitted!"
+        _ -> do
+            fragment <- prompt (reverse $ removeSpaces firstLine)
+            case parseProgram fragment of
+                Nothing -> putStrLn "parsing error"
+                Just stmts -> do
+                    result <- runProgram state stmts
+                    case result of
+                        Left err -> do
+                            putStrLn $ "typing error: " ++ show err
+                            interactiveRun state
+                        Right state' ->
+                            interactiveRun state'
 
     where
         prompt :: String -> IO String

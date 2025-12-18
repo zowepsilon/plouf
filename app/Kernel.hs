@@ -1,5 +1,6 @@
 module Kernel(M, Error, State, emptyState, runStatement, runProgram) where
 
+import System.IO
 import Data.List
 import GHC.Data.List.SetOps
 import Debug.Trace
@@ -606,6 +607,8 @@ runStatement state (Declaration name (Just ty) val) = do
     val <- checkExpr 0 state val ty
     runDecl state name ty val
 
+runStatement state ExitStmt = return (state, "Exitted early!")
+
 runDecl :: State -> String -> Value -> Expr -> M (State, String)
 runDecl state name ty val = do
     val <- evalExpr state val
@@ -616,6 +619,14 @@ runDecl state name ty val = do
 
 runProgram :: State -> [Stmt] -> IO (M State)
 runProgram state [] = return (return state)
+
+runProgram state (ExitStmt : rest) = do
+    _ <- getLine
+    putStr "\x1b[A"
+    hFlush stdout
+
+    runProgram state rest
+
 runProgram state (stmt : rest) =
     case runStatement state stmt of
         Right (state, "") -> runProgram state rest

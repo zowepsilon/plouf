@@ -25,6 +25,7 @@ data Stmt =
   | Axiom String Expr
   | IndDecl String Expr [(String, Expr)]
   | Print Expr
+  | ExitStmt
   deriving Show
 
 data Value =
@@ -112,6 +113,7 @@ instance Show Expr where
         tyName ++ ".ind " ++ intercalate " " (map show args)
 
     show (By stmts) = "by  \n    " ++ intercalate "\n    " (map show stmts)
+    show (NoInfer e) = "@" ++ show e
 
     show Type = "Type"
 
